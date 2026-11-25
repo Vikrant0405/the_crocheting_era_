@@ -4,20 +4,27 @@ import {
   ArrowLeft,
   BarChart3,
   Check,
+  Download,
   Edit3,
   Eye,
   EyeOff,
+  Image as ImageIcon,
+  KeyRound,
   Lock,
   LogOut,
   MessageCircle,
   Package,
   Plus,
+  QrCode,
   RefreshCw,
   Search,
   Settings,
+  ShieldCheck,
   ShoppingBag,
+  Sliders,
   Star,
   Trash2,
+  Truck,
   Upload,
   X,
 } from 'lucide-react';
@@ -78,7 +85,18 @@ const ENQUIRY_STATUSES: EnquiryStatus[] = [
   'Completed',
 ];
 
-type AdminTab = 'overview' | 'products' | 'orders' | 'enquiries' | 'settings';
+type AdminTab = 'overview' | 'products' | 'orders' | 'enquiries' | 'controls' | 'settings';
+
+type DashboardStore = StoreData & {
+  envManagedCredentials?: boolean;
+  adminUsername?: string;
+};
+
+interface TrackingDraft {
+  courierName: string;
+  trackingNumber: string;
+  trackingUrl: string;
+}
 
 export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   token,
@@ -86,13 +104,16 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   onStoreSync,
   onExitAdmin,
 }) => {
+  const [authStatusLoading, setAuthStatusLoading] = useState(!token);
+  const [needsSetup, setNeedsSetup] = useState(false);
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [authError, setAuthError] = useState('');
   const [loggingIn, setLoggingIn] = useState(false);
 
-  const [store, setStore] = useState<StoreData | null>(null);
+  const [store, setStore] = useState<DashboardStore | null>(null);
   const [loading, setLoading] = useState(false);
   const [activeTab, setActiveTab] = useState<AdminTab>('overview');
   const [notice, setNotice] = useState('');
@@ -136,9 +157,45 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     detail: string;
   } | null>(null);
 
+  // Order Tracking Draft State
+  const [trackingDrafts, setTrackingDrafts] = useState<Record<string, TrackingDraft>>({});
+  const [savingTrackingId, setSavingTrackingId] = useState<string | null>(null);
+  const [trackingError, setTrackingError] = useState<{ id: string; msg: string } | null>(null);
+
+  // Admin Credentials Update State
+  const [credCurrentPassword, setCredCurrentPassword] = useState('');
+  const [credNewUsername, setCredNewUsername] = useState('');
+  const [credNewPassword, setCredNewPassword] = useState('');
+  const [savingCreds, setSavingCreds] = useState(false);
+  const [credMsg, setCredMsg] = useState<{ type: 'ok' | 'err'; text: string } | null>(null);
+
+  // Backup Export / Import State
+  const [exportingBackup, setExportingBackup] = useState(false);
+  const [pendingRestoreJson, setPendingRestoreJson] = useState<{
+    fileName: string;
+    data: StoreData;
+  } | null>(null);
+  const [restoringBackup, setRestoringBackup] = useState(false);
+  const [backupError, setBackupError] = useState('');
+
   const showToast = (msg: string) => {
     setNotice(msg);
-    setTimeout(() => setNotice(''), 3000);
+    setTimeout(() => setNotice(''), 3200);
+  };
+
+  const fetchAuthStatus = async () => {
+    setAuthStatusLoading(true);
+    try {
+      const res = await fetch('/api/admin/auth-status');
+      if (res.ok) {
+        const data = await res.json();
+        setNeedsSetup(Boolean(data.needsSetup));
+      }
+    } catch {
+      // Default to standard login if status check fails
+    } finally {
+      setAuthStatusLoading(false);
+    }
   };
 
   const fetchDashboard = async (authToken: string) => {
@@ -152,9 +209,21 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         return;
       }
       if (res.ok) {
-        const data: StoreData = await res.json();
+        const data: DashboardStore = await res.json();
         setStore(data);
         setSettingsDraft(data.settings);
+        if (data.adminUsername && !credNewUsername) {
+          setCredNewUsername(data.adminUsername);
+        }
+        const drafts: Record<string, TrackingDraft> = {};
+        data.orders.forEach((o) => {
+          drafts[o.id] = {
+            courierName: o.courierName || '',
+            trackingNumber: o.trackingNumber || '',
+            trackingUrl: o.trackingUrl || '',
+          };
+        });
+        setTrackingDrafts(drafts);
       }
     } finally {
       setLoading(false);
@@ -164,8 +233,49 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   useEffect(() => {
     if (token) {
       fetchDashboard(token);
+    } else {
+      fetchAuthStatus();
     }
   }, [token]);
+
+  const handleSetupAdmin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setAuthError('');
+    if (username.trim().length < 3) {
+      setAuthError('Choose a username of at least 3 characters.');
+      return;
+    }
+    if (password.length < 6) {
+      setAuthError('Choose a password of at least 6 characters.');
+      return;
+    }
+    if (password !== confirmPassword) {
+      setAuthError('Passwords do not match.');
+      return;
+    }
+    setLoggingIn(true);
+    try {
+      const res = await fetch('/api/admin/setup', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: username.trim(), password }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setAuthError(data.error || 'Could not complete admin setup.');
+        return;
+      }
+      setNeedsSetup(false);
+      onTokenChange(data.token);
+      setUsername('');
+      setPassword('');
+      setConfirmPassword('');
+    } catch {
+      setAuthError('Unable to reach server.');
+    } finally {
+      setLoggingIn(false);
+    }
+  };
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -179,6 +289,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       });
       const data = await res.json();
       if (!res.ok) {
+        if (res.status === 409) setNeedsSetup(true);
         setAuthError(data.error || 'Invalid admin username or password.');
         return;
       }
@@ -402,6 +513,42 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     }
   };
 
+  const handleSaveOrderTracking = async (orderId: string) => {
+    if (!token) return;
+    const draft = trackingDrafts[orderId] || {
+      courierName: '',
+      trackingNumber: '',
+      trackingUrl: '',
+    };
+    setSavingTrackingId(orderId);
+    setTrackingError(null);
+    try {
+      const res = await fetch(`/api/admin/orders/${orderId}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-admin-token': token,
+        },
+        body: JSON.stringify({
+          courierName: draft.courierName.trim() || null,
+          trackingNumber: draft.trackingNumber.trim() || null,
+          trackingUrl: draft.trackingUrl.trim() || null,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setTrackingError({ id: orderId, msg: data.error || 'Could not save tracking info.' });
+        return;
+      }
+      await fetchDashboard(token);
+      showToast(`Tracking details saved for ${orderId}.`);
+    } catch {
+      setTrackingError({ id: orderId, msg: 'Network error saving tracking info.' });
+    } finally {
+      setSavingTrackingId(null);
+    }
+  };
+
   const handleUpdateEnquiryStatus = async (enquiryId: string, status: EnquiryStatus) => {
     if (!token) return;
     const res = await fetch(`/api/admin/enquiries/${enquiryId}`, {
@@ -449,8 +596,24 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     }
   };
 
-  const handleSaveSettings = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleSettingsImageUpload = (
+    field: 'heroImageUrl' | 'aboutStudioImageUrl1' | 'aboutStudioImageUrl2' | 'upiQrImageUrl',
+    e: React.ChangeEvent<HTMLInputElement>
+  ) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result === 'string') {
+        const result = reader.result;
+        setSettingsDraft((prev) => (prev ? { ...prev, [field]: result } : prev));
+      }
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleSaveSettings = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
     if (!token || !settingsDraft) return;
     setSavingSettings(true);
     try {
@@ -465,7 +628,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       if (res.ok) {
         await fetchDashboard(token);
         onStoreSync();
-        showToast('Studio settings saved.');
+        showToast('Studio settings & permissions saved.');
       }
     } finally {
       setSavingSettings(false);
@@ -494,85 +657,234 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     }
   };
 
+  const handleExportBackup = async () => {
+    if (!token) return;
+    setExportingBackup(true);
+    setBackupError('');
+    try {
+      const res = await fetch('/api/admin/export', {
+        headers: { 'x-admin-token': token },
+      });
+      if (!res.ok) {
+        setBackupError('Failed to export backup.');
+        return;
+      }
+      const data = await res.json();
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `the-crocheting-era-backup-${new Date().toISOString().slice(0, 10)}.json`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+      showToast('Studio backup downloaded.');
+    } catch {
+      setBackupError('Unable to download studio backup.');
+    } finally {
+      setExportingBackup(false);
+    }
+  };
+
+  const handleBackupFilePick = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setBackupError('');
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const parsed = JSON.parse(String(reader.result || '{}'));
+        const unwrapped = parsed?.data || parsed?.store || parsed;
+        if (!unwrapped || !Array.isArray(unwrapped.products)) {
+          setBackupError('Selected file is not a valid studio backup JSON.');
+          setPendingRestoreJson(null);
+          return;
+        }
+        setPendingRestoreJson({ fileName: file.name, data: unwrapped });
+      } catch {
+        setBackupError('Could not read JSON file. Please pick a valid backup.');
+        setPendingRestoreJson(null);
+      }
+    };
+    reader.readAsText(file);
+  };
+
+  const handleConfirmRestore = async () => {
+    if (!token || !pendingRestoreJson) return;
+    setRestoringBackup(true);
+    setBackupError('');
+    try {
+      const res = await fetch('/api/admin/import', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-admin-token': token,
+        },
+        body: JSON.stringify({ data: pendingRestoreJson.data }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setBackupError(data.error || 'Could not restore backup.');
+        return;
+      }
+      setPendingRestoreJson(null);
+      await fetchDashboard(token);
+      onStoreSync();
+      showToast('Studio backup restored successfully.');
+    } catch {
+      setBackupError('Network error while restoring studio backup.');
+    } finally {
+      setRestoringBackup(false);
+    }
+  };
+
+  const handleChangeCredentials = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!token) return;
+    setSavingCreds(true);
+    setCredMsg(null);
+    try {
+      const res = await fetch('/api/admin/change-credentials', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-admin-token': token,
+        },
+        body: JSON.stringify({
+          currentPassword: credCurrentPassword,
+          newUsername: credNewUsername.trim(),
+          newPassword: credNewPassword,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setCredMsg({ type: 'err', text: data.error || 'Could not update credentials.' });
+        return;
+      }
+      setCredCurrentPassword('');
+      setCredNewPassword('');
+      setCredMsg({ type: 'ok', text: `Credentials updated for username "${data.username}".` });
+      await fetchDashboard(token);
+    } catch {
+      setCredMsg({ type: 'err', text: 'Network error while updating credentials.' });
+    } finally {
+      setSavingCreds(false);
+    }
+  };
+
   if (!token) {
     return (
       <div className="mx-auto max-w-md px-4 py-16 sm:px-6">
         <div className="rounded-2xl border border-[#E6DDD7] bg-white p-8 shadow-sm space-y-6">
           <div className="flex flex-col items-center text-center space-y-2">
             <div className="flex h-12 w-12 items-center justify-center rounded-full bg-[#F4DCE2] text-[#8B3152]">
-              <Lock className="h-5 w-5" />
+              {needsSetup ? <ShieldCheck className="h-5 w-5" /> : <Lock className="h-5 w-5" />}
             </div>
             <h1 className="font-display text-3xl font-semibold text-[#2A2225]">
-              Studio Owner Admin
+              {needsSetup ? 'Create Owner Login' : 'Studio Owner Admin'}
             </h1>
             <p className="text-sm text-[#6E6266]">
-              Manage crochet products, prices, inventory, orders, enquiries, and studio settings.
+              {needsSetup
+                ? 'First-time setup: choose your private admin username and password to protect this studio panel.'
+                : 'Manage crochet products, permissions, studio visuals, orders, enquiries, and settings.'}
             </p>
           </div>
 
-          <form onSubmit={handleLogin} className="space-y-4">
-            <div>
-              <label
-                htmlFor="admin-username"
-                className="block text-xs font-semibold text-[#2A2225] mb-1.5"
-              >
-                Admin Username
-              </label>
-              <input
-                id="admin-username"
-                type="text"
-                autoComplete="username"
-                required
-                value={username}
-                onChange={(e) => setUsername(e.target.value)}
-                placeholder="Enter admin username"
-                className="w-full rounded-xl border border-[#E6DDD7] bg-[#FBF7F3] px-3.5 py-2.5 text-sm focus:border-[#8B3152] focus:outline-none"
-              />
-            </div>
-
-            <div>
-              <label
-                htmlFor="admin-password"
-                className="block text-xs font-semibold text-[#2A2225] mb-1.5"
-              >
-                Password
-              </label>
-              <div className="relative">
-                <input
-                  id="admin-password"
-                  type={showPassword ? 'text' : 'password'}
-                  autoComplete="current-password"
-                  required
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  placeholder="Enter admin password"
-                  className="w-full rounded-xl border border-[#E6DDD7] bg-[#FBF7F3] px-3.5 py-2.5 pr-10 text-sm focus:border-[#8B3152] focus:outline-none"
-                />
-                <button
-                  type="button"
-                  onClick={() => setShowPassword((prev) => !prev)}
-                  aria-label={showPassword ? 'Hide password' : 'Show password'}
-                  className="absolute right-2.5 top-1/2 -translate-y-1/2 p-1 text-[#6E6266] hover:text-[#2A2225]"
+          {authStatusLoading ? (
+            <p className="py-6 text-center text-xs text-[#6E6266]">Checking studio access...</p>
+          ) : (
+            <form onSubmit={needsSetup ? handleSetupAdmin : handleLogin} className="space-y-4">
+              <div>
+                <label
+                  htmlFor="admin-username"
+                  className="block text-xs font-semibold text-[#2A2225] mb-1.5"
                 >
-                  {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                </button>
+                  Admin Username
+                </label>
+                <input
+                  id="admin-username"
+                  type="text"
+                  autoComplete="username"
+                  required
+                  value={username}
+                  onChange={(e) => setUsername(e.target.value)}
+                  placeholder="Enter admin username"
+                  className="w-full rounded-xl border border-[#E6DDD7] bg-[#FBF7F3] px-3.5 py-2.5 text-sm focus:border-[#8B3152] focus:outline-none"
+                />
               </div>
-            </div>
 
-            {authError && (
-              <p className="rounded-xl bg-[#F4DCE2] px-3.5 py-2 text-xs font-medium text-[#65213B]">
-                {authError}
-              </p>
-            )}
+              <div>
+                <label
+                  htmlFor="admin-password"
+                  className="block text-xs font-semibold text-[#2A2225] mb-1.5"
+                >
+                  {needsSetup ? 'Create Password (min 6 chars)' : 'Password'}
+                </label>
+                <div className="relative">
+                  <input
+                    id="admin-password"
+                    type={showPassword ? 'text' : 'password'}
+                    autoComplete={needsSetup ? 'new-password' : 'current-password'}
+                    required
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    placeholder={needsSetup ? 'Choose a strong password' : 'Enter admin password'}
+                    className="w-full rounded-xl border border-[#E6DDD7] bg-[#FBF7F3] px-3.5 py-2.5 pr-10 text-sm focus:border-[#8B3152] focus:outline-none"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword((prev) => !prev)}
+                    aria-label={showPassword ? 'Hide password' : 'Show password'}
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 p-1 text-[#6E6266] hover:text-[#2A2225]"
+                  >
+                    {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                  </button>
+                </div>
+              </div>
 
-            <button
-              type="submit"
-              disabled={loggingIn}
-              className="w-full min-h-[46px] rounded-xl bg-[#8B3152] px-5 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-[#65213B] disabled:opacity-50"
-            >
-              {loggingIn ? 'Signing in...' : 'Sign In to Admin'}
-            </button>
-          </form>
+              {needsSetup && (
+                <div>
+                  <label
+                    htmlFor="admin-confirm-password"
+                    className="block text-xs font-semibold text-[#2A2225] mb-1.5"
+                  >
+                    Confirm Password
+                  </label>
+                  <input
+                    id="admin-confirm-password"
+                    type={showPassword ? 'text' : 'password'}
+                    autoComplete="new-password"
+                    required
+                    value={confirmPassword}
+                    onChange={(e) => setConfirmPassword(e.target.value)}
+                    placeholder="Re-enter your password"
+                    className="w-full rounded-xl border border-[#E6DDD7] bg-[#FBF7F3] px-3.5 py-2.5 text-sm focus:border-[#8B3152] focus:outline-none"
+                  />
+                </div>
+              )}
+
+              {authError && (
+                <p className="rounded-xl bg-[#F4DCE2] px-3.5 py-2 text-xs font-medium text-[#65213B]">
+                  {authError}
+                </p>
+              )}
+
+              <button
+                type="submit"
+                disabled={loggingIn}
+                className="w-full min-h-[46px] rounded-xl bg-[#8B3152] px-5 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-[#65213B] disabled:opacity-50"
+              >
+                {loggingIn
+                  ? needsSetup
+                    ? 'Creating Owner Account...'
+                    : 'Signing in...'
+                  : needsSetup
+                  ? 'Save Owner Login & Enter'
+                  : 'Sign In to Admin'}
+              </button>
+            </form>
+          )}
 
           <div className="border-t border-[#F2EAE1] pt-4 flex items-center justify-between text-xs text-[#6E6266]">
             <span>Authorized owner access only</span>
@@ -665,7 +977,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               label: `Enquiries (${store?.enquiries.length || 0})`,
               icon: MessageCircle,
             },
-            { id: 'settings', label: 'Reviews & Settings', icon: Settings },
+            { id: 'controls', label: 'Permissions & Visuals', icon: Sliders },
+            { id: 'settings', label: 'Reviews, Alerts & Access', icon: Settings },
           ] as const
         ).map((tab) => {
           const Icon = tab.icon;
@@ -1329,95 +1642,163 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       {activeTab === 'orders' && store && (
         <div className="space-y-4">
           <h2 className="font-display text-2xl font-semibold text-[#2A2225]">
-            Customer Orders
+            Customer Orders &amp; Dispatch Tracking
           </h2>
           {store.orders.length === 0 ? (
             <p className="rounded-2xl border border-[#E6DDD7] bg-white p-6 text-sm text-[#6E6266]">
               No customer orders yet.
             </p>
           ) : (
-            store.orders.map((ord) => (
-              <div
-                key={ord.id}
-                className="rounded-2xl border border-[#E6DDD7] bg-white p-5 space-y-4"
-              >
-                <div className="flex flex-wrap items-start justify-between gap-4 border-b border-[#F2EAE1] pb-3">
-                  <div className="space-y-1">
-                    <p className="font-mono text-xs font-semibold text-[#8B3152]">
-                      {ord.id} · {ord.createdAt.slice(0, 10)}
-                    </p>
-                    <h3 className="text-base font-semibold text-[#2A2225]">
-                      {ord.customerName} ({ord.phone})
-                    </h3>
-                    <p className="text-xs text-[#6E6266]">
-                      {ord.address}, {ord.city}, {ord.state} – {ord.pincode}
-                    </p>
-                  </div>
-
-                  <div className="flex flex-wrap items-center gap-2.5">
-                    <div className="text-right mr-1">
-                      <p className="text-base font-bold text-[#2A2225] tabular-nums">
-                        {formatINR(ord.total)}
+            store.orders.map((ord) => {
+              const tDraft = trackingDrafts[ord.id] || {
+                courierName: ord.courierName || '',
+                trackingNumber: ord.trackingNumber || '',
+                trackingUrl: ord.trackingUrl || '',
+              };
+              return (
+                <div
+                  key={ord.id}
+                  className="rounded-2xl border border-[#E6DDD7] bg-white p-5 space-y-4"
+                >
+                  <div className="flex flex-wrap items-start justify-between gap-4 border-b border-[#F2EAE1] pb-3">
+                    <div className="space-y-1">
+                      <p className="font-mono text-xs font-semibold text-[#8B3152]">
+                        {ord.id} · {ord.createdAt.slice(0, 10)}
                       </p>
-                      <p className="text-xs text-[#6E6266]">{ord.paymentMethod}</p>
+                      <h3 className="text-base font-semibold text-[#2A2225]">
+                        {ord.customerName} ({ord.phone})
+                      </h3>
+                      <p className="text-xs text-[#6E6266]">
+                        {ord.address}, {ord.city}, {ord.state} – {ord.pincode}
+                      </p>
                     </div>
 
-                    <a
-                      href={buildWhatsAppUrl(
-                        ord.phone,
-                        `Hello ${ord.customerName}! Your order *${ord.id}* (${formatINR(ord.total)}) is currently *${ord.status}*. Thank you for shopping with The Crocheting Era!`
-                      )}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="inline-flex min-h-[38px] items-center gap-1.5 rounded-xl bg-[#E4EBE2] px-3 py-1.5 text-xs font-semibold text-[#3C4F36] hover:bg-[#D5E1D2]"
-                    >
-                      <MessageCircle className="h-3.5 w-3.5" />
-                      WhatsApp Customer
-                    </a>
+                    <div className="flex flex-wrap items-center gap-2.5">
+                      <div className="text-right mr-1">
+                        <p className="text-base font-bold text-[#2A2225] tabular-nums">
+                          {formatINR(ord.total)}
+                        </p>
+                        <p className="text-xs text-[#6E6266]">{ord.paymentMethod}</p>
+                      </div>
 
-                    <select
-                      aria-label={`Order status for ${ord.id}`}
-                      value={ord.status}
-                      onChange={(e) =>
-                        handleUpdateOrderStatus(ord.id, e.target.value as OrderStatus)
-                      }
-                      className="rounded-xl border border-[#E6DDD7] bg-[#FBF7F3] px-3 py-2 text-xs font-semibold text-[#2A2225] focus:border-[#8B3152] focus:outline-none"
-                    >
-                      {ORDER_STATUSES.map((st) => (
-                        <option key={st} value={st}>
-                          {st}
-                        </option>
-                      ))}
-                    </select>
+                      <a
+                        href={buildWhatsAppUrl(
+                          ord.phone,
+                          `Hello ${ord.customerName}! Your order *${ord.id}* (${formatINR(ord.total)}) is currently *${ord.status}*.${ord.courierName ? ` Courier: ${ord.courierName}` : ''}${ord.trackingNumber ? ` (AWB: ${ord.trackingNumber})` : ''}. Thank you for shopping with The Crocheting Era!`
+                        )}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex min-h-[38px] items-center gap-1.5 rounded-xl bg-[#E4EBE2] px-3 py-1.5 text-xs font-semibold text-[#3C4F36] hover:bg-[#D5E1D2]"
+                      >
+                        <MessageCircle className="h-3.5 w-3.5" />
+                        WhatsApp Customer
+                      </a>
+
+                      <select
+                        aria-label={`Order status for ${ord.id}`}
+                        value={ord.status}
+                        onChange={(e) =>
+                          handleUpdateOrderStatus(ord.id, e.target.value as OrderStatus)
+                        }
+                        className="rounded-xl border border-[#E6DDD7] bg-[#FBF7F3] px-3 py-2 text-xs font-semibold text-[#2A2225] focus:border-[#8B3152] focus:outline-none"
+                      >
+                        {ORDER_STATUSES.map((st) => (
+                          <option key={st} value={st}>
+                            {st}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+
+                  <div className="space-y-1.5 text-xs text-[#4E4347]">
+                    {ord.items.map((item, idx) => (
+                      <div key={idx} className="flex justify-between">
+                        <span>
+                          • {item.name} ({item.selectedColor.name}) × {item.quantity}
+                          {item.customNote ? ` — "${item.customNote}"` : ''}
+                        </span>
+                        <span className="font-semibold tabular-nums">
+                          {formatINR(item.price * item.quantity)}
+                        </span>
+                      </div>
+                    ))}
+                    {ord.upiTransactionId && (
+                      <p className="pt-1 font-mono text-[11px] font-semibold text-[#51664A]">
+                        UPI Ref / UTR: {ord.upiTransactionId}
+                      </p>
+                    )}
+                    {ord.giftWrap && (
+                      <p className="pt-1 text-[#8B3152]">
+                        Gift Wrap Included {ord.giftMessage ? `· Card: "${ord.giftMessage}"` : ''}
+                      </p>
+                    )}
+                    {ord.whatsappAlertStatus && (
+                      <p className="pt-1 text-[11px] text-[#6E6266]">
+                        Admin WhatsApp Alert:{' '}
+                        <span className="font-semibold text-[#2A2225]">{ord.whatsappAlertStatus}</span>
+                        {ord.whatsappAlertDetail ? ` · ${ord.whatsappAlertDetail}` : ''}
+                      </p>
+                    )}
+                  </div>
+
+                  {/* Courier Dispatch Tracking Editor */}
+                  <div className="rounded-xl border border-[#EFE6DD] bg-[#FBF7F3] p-3.5 space-y-2.5">
+                    <div className="flex items-center gap-1.5 text-xs font-semibold text-[#2A2225]">
+                      <Truck className="h-3.5 w-3.5 text-[#8B3152]" />
+                      Courier &amp; Shipment Tracking (visible on customer Order Tracker)
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-12 gap-2.5">
+                      <input
+                        value={tDraft.courierName}
+                        onChange={(e) =>
+                          setTrackingDrafts((prev) => ({
+                            ...prev,
+                            [ord.id]: { ...tDraft, courierName: e.target.value },
+                          }))
+                        }
+                        placeholder="Courier (e.g. Delhivery, DTDC)"
+                        className="sm:col-span-3 rounded-lg border border-[#E6DDD7] bg-white px-3 py-2 text-xs focus:border-[#8B3152] focus:outline-none"
+                      />
+                      <input
+                        value={tDraft.trackingNumber}
+                        onChange={(e) =>
+                          setTrackingDrafts((prev) => ({
+                            ...prev,
+                            [ord.id]: { ...tDraft, trackingNumber: e.target.value },
+                          }))
+                        }
+                        placeholder="AWB / Tracking No."
+                        className="sm:col-span-3 rounded-lg border border-[#E6DDD7] bg-white px-3 py-2 text-xs font-mono focus:border-[#8B3152] focus:outline-none"
+                      />
+                      <input
+                        type="url"
+                        value={tDraft.trackingUrl}
+                        onChange={(e) =>
+                          setTrackingDrafts((prev) => ({
+                            ...prev,
+                            [ord.id]: { ...tDraft, trackingUrl: e.target.value },
+                          }))
+                        }
+                        placeholder="https://tracking-link..."
+                        className="sm:col-span-4 rounded-lg border border-[#E6DDD7] bg-white px-3 py-2 text-xs focus:border-[#8B3152] focus:outline-none"
+                      />
+                      <button
+                        type="button"
+                        disabled={savingTrackingId === ord.id}
+                        onClick={() => handleSaveOrderTracking(ord.id)}
+                        className="sm:col-span-2 min-h-[34px] rounded-lg bg-[#2A2225] px-3 py-1.5 text-xs font-semibold text-white hover:bg-[#8B3152] disabled:opacity-50"
+                      >
+                        {savingTrackingId === ord.id ? 'Saving...' : 'Save Tracking'}
+                      </button>
+                    </div>
+                    {trackingError?.id === ord.id && (
+                      <p className="text-xs font-medium text-[#9B2C2C]">{trackingError.msg}</p>
+                    )}
                   </div>
                 </div>
-
-                <div className="space-y-1.5 text-xs text-[#4E4347]">
-                  {ord.items.map((item, idx) => (
-                    <div key={idx} className="flex justify-between">
-                      <span>
-                        • {item.name} ({item.selectedColor.name}) × {item.quantity}
-                        {item.customNote ? ` — "${item.customNote}"` : ''}
-                      </span>
-                      <span className="font-semibold tabular-nums">
-                        {formatINR(item.price * item.quantity)}
-                      </span>
-                    </div>
-                  ))}
-                  {ord.giftWrap && (
-                    <p className="pt-1 text-[#8B3152]">
-                      Gift Wrap Included {ord.giftMessage ? `· Card: "${ord.giftMessage}"` : ''}
-                    </p>
-                  )}
-                  {ord.whatsappAlertStatus && (
-                    <p className="pt-1 text-[11px] text-[#6E6266]">
-                      Admin WhatsApp Alert: <span className="font-semibold text-[#2A2225]">{ord.whatsappAlertStatus}</span>
-                      {ord.whatsappAlertDetail ? ` · ${ord.whatsappAlertDetail}` : ''}
-                    </p>
-                  )}
-                </div>
-              </div>
-            ))
+              );
+            })
           )}
         </div>
       )}
@@ -1494,303 +1875,758 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         </div>
       )}
 
-      {/* Reviews & Settings Tab */}
-      {activeTab === 'settings' && store && settingsDraft && (
-        <div className="grid grid-cols-1 gap-8 lg:grid-cols-12">
-          <div className="lg:col-span-6 space-y-4">
-            <h2 className="font-display text-2xl font-semibold text-[#2A2225]">
-              Customer Reviews
-            </h2>
-            <div className="space-y-3">
-              {store.reviews.length === 0 ? (
-                <p className="rounded-2xl border border-[#E6DDD7] bg-white p-6 text-sm text-[#6E6266]">
-                  No customer reviews yet. Reviews submitted on product pages appear here for moderation.
+      {/* Permissions, UPI QR & Visuals Tab */}
+      {activeTab === 'controls' && store && settingsDraft && (
+        <form onSubmit={handleSaveSettings} className="space-y-6">
+          <div className="grid grid-cols-1 gap-6 lg:grid-cols-12">
+            {/* Storefront Feature Permissions */}
+            <div className="lg:col-span-6 rounded-2xl border border-[#E6DDD7] bg-white p-6 space-y-4">
+              <div>
+                <h2 className="font-display text-2xl font-semibold text-[#2A2225]">
+                  Storefront &amp; Checkout Permissions
+                </h2>
+                <p className="text-xs text-[#6E6266] mt-0.5">
+                  Control which customer features and payment options are active across your live website.
                 </p>
-              ) : (
-                store.reviews.map((rev) => (
-                  <div
-                    key={rev.id}
-                    className="rounded-2xl border border-[#E6DDD7] bg-white p-4 space-y-2"
+              </div>
+
+              <div className="space-y-3">
+                {[
+                  {
+                    key: 'upiEnabled' as const,
+                    checked: settingsDraft.upiEnabled !== false,
+                    title: 'Accept UPI Online Payments (GPay, PhonePe, Paytm & Live QR)',
+                    desc: 'Shows UPI QR payment screen & UTR verification field at checkout.',
+                  },
+                  {
+                    key: 'codEnabled' as const,
+                    checked: Boolean(settingsDraft.codEnabled),
+                    title: 'Accept Cash on Delivery (COD)',
+                    desc: 'Allows customers to choose Cash on Delivery when placing orders.',
+                  },
+                  {
+                    key: 'giftWrapEnabled' as const,
+                    checked: settingsDraft.giftWrapEnabled !== false,
+                    title: 'Allow Special Gift Packaging & Handwritten Note',
+                    desc: 'Enables the gift wrap checkbox and card message option inside Shopping Bag.',
+                  },
+                  {
+                    key: 'allowCustomOrders' as const,
+                    checked: settingsDraft.allowCustomOrders !== false,
+                    title: 'Accept Custom & Bulk Crochet Orders',
+                    desc: 'Turns on the Create Your Own Crochet builder and API enquiry intake.',
+                  },
+                  {
+                    key: 'allowCustomerReviews' as const,
+                    checked: settingsDraft.allowCustomerReviews !== false,
+                    title: 'Accept New Customer Product Reviews',
+                    desc: 'Shows or pauses the review submission form on product detail pages.',
+                  },
+                  {
+                    key: 'autoApproveReviews' as const,
+                    checked: settingsDraft.autoApproveReviews !== false,
+                    title: 'Auto-Publish New Reviews Immediately',
+                    desc: 'Turn off to hold new customer reviews for manual Admin approval first.',
+                  },
+                ].map((perm) => (
+                  <label
+                    key={perm.key}
+                    className="flex items-start gap-3 rounded-xl border border-[#EFE6DD] bg-[#FBF7F3] p-3.5 cursor-pointer hover:border-[#8B3152]/40"
                   >
-                    <div className="flex items-center justify-between gap-2">
-                      <div className="flex items-center gap-1.5 text-xs font-semibold text-[#2A2225]">
-                        <Star className="h-3.5 w-3.5 fill-[#D8A24A] text-[#D8A24A]" />
-                        {rev.rating}.0 · {rev.author} ({rev.location})
-                      </div>
-                      <span className="text-xs text-[#6E6266]">
-                        {rev.approved ? 'Published' : 'Hidden'}
-                      </span>
+                    <input
+                      type="checkbox"
+                      checked={perm.checked}
+                      onChange={(e) =>
+                        setSettingsDraft({
+                          ...settingsDraft,
+                          [perm.key]: e.target.checked,
+                        })
+                      }
+                      className="mt-0.5 h-4 w-4 shrink-0 accent-[#8B3152]"
+                    />
+                    <div className="min-w-0">
+                      <p className="text-xs font-semibold text-[#2A2225]">{perm.title}</p>
+                      <p className="text-[11px] text-[#6E6266] mt-0.5">{perm.desc}</p>
                     </div>
-                    <p className="text-xs text-[#4E4347]">“{rev.comment}”</p>
-                    <div className="flex items-center gap-2 pt-1">
-                      <button
-                        type="button"
-                        onClick={() => handleToggleReviewApproval(rev)}
-                        className="rounded-lg border border-[#E6DDD7] bg-[#FBF7F3] px-3 py-1 text-xs font-semibold text-[#2A2225] hover:border-[#8B3152]"
-                      >
-                        {rev.approved ? 'Hide' : 'Approve'}
-                      </button>
-                      {confirmDeleteReviewId === rev.id ? (
-                        <>
-                          <button
-                            type="button"
-                            onClick={() => handleDeleteReview(rev.id)}
-                            className="rounded-lg bg-[#8B3152] px-3 py-1 text-xs font-semibold text-white"
-                          >
-                            Confirm Delete
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => setConfirmDeleteReviewId(null)}
-                            className="rounded-lg border border-[#E6DDD7] px-2.5 py-1 text-xs text-[#6E6266]"
-                          >
-                            Cancel
-                          </button>
-                        </>
-                      ) : (
-                        <button
-                          type="button"
-                          onClick={() => setConfirmDeleteReviewId(rev.id)}
-                          className="rounded-lg border border-[#E6DDD7] px-3 py-1 text-xs font-semibold text-[#6E6266] hover:text-[#8B3152]"
-                        >
-                          Delete
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                ))
-              )}
+                  </label>
+                ))}
+              </div>
+            </div>
+
+            {/* UPI QR & Shipping Fee Config */}
+            <div className="lg:col-span-6 rounded-2xl border border-[#E6DDD7] bg-white p-6 space-y-4">
+              <div className="flex items-center gap-2">
+                <QrCode className="h-5 w-5 text-[#8B3152]" />
+                <div>
+                  <h2 className="font-display text-2xl font-semibold text-[#2A2225]">
+                    UPI QR &amp; Shipping Rates
+                  </h2>
+                  <p className="text-xs text-[#6E6266]">
+                    Checkout generates an amount-locked UPI QR code using these details.
+                  </p>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-[#6E6266] mb-1">
+                    Merchant UPI ID (VPA)
+                  </label>
+                  <input
+                    value={settingsDraft.upiId || ''}
+                    onChange={(e) =>
+                      setSettingsDraft({ ...settingsDraft, upiId: e.target.value })
+                    }
+                    placeholder="yourname@okaxis"
+                    className="w-full rounded-xl border border-[#E6DDD7] bg-[#FBF7F3] px-3 py-2 text-sm font-mono focus:border-[#8B3152] focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-[#6E6266] mb-1">
+                    UPI Payee Name
+                  </label>
+                  <input
+                    value={settingsDraft.upiPayeeName || ''}
+                    onChange={(e) =>
+                      setSettingsDraft({ ...settingsDraft, upiPayeeName: e.target.value })
+                    }
+                    placeholder="The Crocheting Era"
+                    className="w-full rounded-xl border border-[#E6DDD7] bg-[#FBF7F3] px-3 py-2 text-sm focus:border-[#8B3152] focus:outline-none"
+                  />
+                </div>
+              </div>
+
+              <div className="rounded-xl border border-[#EFE6DD] bg-[#FBF7F3] p-4 space-y-2.5">
+                <label className="block text-xs font-semibold text-[#2A2225]">
+                  Custom Static UPI QR Photo (Optional)
+                </label>
+                <p className="text-[11px] text-[#6E6266]">
+                  Leave blank to auto-generate a dynamic UPI QR from your UPI ID and exact order amount.
+                </p>
+                <div className="flex flex-wrap items-center gap-3">
+                  {settingsDraft.upiQrImageUrl && (
+                    <img
+                      src={settingsDraft.upiQrImageUrl}
+                      alt="Uploaded UPI QR preview"
+                      className="h-16 w-16 rounded-lg border border-[#E6DDD7] bg-white object-contain p-1"
+                    />
+                  )}
+                  <label className="inline-flex min-h-[38px] cursor-pointer items-center gap-2 rounded-xl border border-dashed border-[#CDBEB5] bg-white px-3.5 py-1.5 text-xs font-medium text-[#2A2225] hover:border-[#8B3152]">
+                    <Upload className="h-3.5 w-3.5 text-[#8B3152]" />
+                    {settingsDraft.upiQrImageUrl ? 'Replace QR Image' : 'Upload UPI QR Image'}
+                    <input
+                      type="file"
+                      accept="image/*"
+                      onChange={(e) => handleSettingsImageUpload('upiQrImageUrl', e)}
+                      className="hidden"
+                    />
+                  </label>
+                  {settingsDraft.upiQrImageUrl && (
+                    <button
+                      type="button"
+                      onClick={() => setSettingsDraft({ ...settingsDraft, upiQrImageUrl: '' })}
+                      className="inline-flex min-h-[38px] items-center gap-1 rounded-xl border border-[#E6DDD7] bg-white px-3 py-1.5 text-xs text-[#6E6266] hover:text-[#8B3152]"
+                    >
+                      <X className="h-3.5 w-3.5" />
+                      Use Auto QR
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-[#6E6266] mb-1">
+                    Shipping Fee (₹)
+                  </label>
+                  <input
+                    type="number"
+                    min={0}
+                    value={settingsDraft.shippingFee ?? 79}
+                    onChange={(e) =>
+                      setSettingsDraft({ ...settingsDraft, shippingFee: Number(e.target.value) })
+                    }
+                    className="w-full rounded-xl border border-[#E6DDD7] bg-[#FBF7F3] px-3 py-2 text-sm tabular-nums focus:border-[#8B3152] focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-[#6E6266] mb-1">
+                    Free Ship Above (₹)
+                  </label>
+                  <input
+                    type="number"
+                    min={0}
+                    value={settingsDraft.freeShippingThreshold}
+                    onChange={(e) =>
+                      setSettingsDraft({
+                        ...settingsDraft,
+                        freeShippingThreshold: Number(e.target.value),
+                      })
+                    }
+                    className="w-full rounded-xl border border-[#E6DDD7] bg-[#FBF7F3] px-3 py-2 text-sm tabular-nums focus:border-[#8B3152] focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-[#6E6266] mb-1">
+                    Gift Wrap Fee (₹)
+                  </label>
+                  <input
+                    type="number"
+                    min={0}
+                    value={settingsDraft.giftWrapFee}
+                    onChange={(e) =>
+                      setSettingsDraft({ ...settingsDraft, giftWrapFee: Number(e.target.value) })
+                    }
+                    className="w-full rounded-xl border border-[#E6DDD7] bg-[#FBF7F3] px-3 py-2 text-sm tabular-nums focus:border-[#8B3152] focus:outline-none"
+                  />
+                </div>
+              </div>
             </div>
           </div>
 
-          <form
-            onSubmit={handleSaveSettings}
-            className="lg:col-span-6 rounded-2xl border border-[#E6DDD7] bg-white p-6 space-y-4 h-fit"
-          >
-            <h2 className="font-display text-2xl font-semibold text-[#2A2225]">
-              Studio &amp; Checkout Settings
-            </h2>
+          {/* Storefront & About Visuals Manager */}
+          <div className="rounded-2xl border border-[#E6DDD7] bg-white p-6 space-y-5">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="flex items-center gap-2">
+                <ImageIcon className="h-5 w-5 text-[#8B3152]" />
+                <div>
+                  <h2 className="font-display text-2xl font-semibold text-[#2A2225]">
+                    Homepage Hero &amp; About Us Photography
+                  </h2>
+                  <p className="text-xs text-[#6E6266]">
+                    Upload your own real founder, workspace, or bouquet photography to personalize your boutique.
+                  </p>
+                </div>
+              </div>
+            </div>
 
             <div>
               <label className="block text-xs font-semibold text-[#6E6266] mb-1">
-                WhatsApp Business Number (with country code)
+                Homepage Hero Showcase Title
               </label>
               <input
-                value={settingsDraft.whatsappNumber}
+                value={settingsDraft.heroBadgeText || ''}
                 onChange={(e) =>
-                  setSettingsDraft({ ...settingsDraft, whatsappNumber: e.target.value })
+                  setSettingsDraft({ ...settingsDraft, heroBadgeText: e.target.value })
                 }
-                className="w-full rounded-xl border border-[#E6DDD7] bg-[#FBF7F3] px-3 py-2 text-sm font-mono focus:border-[#8B3152] focus:outline-none"
+                placeholder="Pastel Tulip Bouquet"
+                className="w-full sm:max-w-md rounded-xl border border-[#E6DDD7] bg-[#FBF7F3] px-3 py-2 text-sm focus:border-[#8B3152] focus:outline-none"
               />
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <div>
-                <label className="block text-xs font-semibold text-[#6E6266] mb-1">
-                  Instagram Handle
-                </label>
-                <input
-                  value={settingsDraft.instagramHandle}
-                  onChange={(e) =>
-                    setSettingsDraft({ ...settingsDraft, instagramHandle: e.target.value })
-                  }
-                  className="w-full rounded-xl border border-[#E6DDD7] bg-[#FBF7F3] px-3 py-2 text-sm focus:border-[#8B3152] focus:outline-none"
-                />
-              </div>
-              <div>
-                <label className="block text-xs font-semibold text-[#6E6266] mb-1">
-                  Studio Email
-                </label>
-                <input
-                  value={settingsDraft.studioEmail}
-                  onChange={(e) =>
-                    setSettingsDraft({ ...settingsDraft, studioEmail: e.target.value })
-                  }
-                  className="w-full rounded-xl border border-[#E6DDD7] bg-[#FBF7F3] px-3 py-2 text-sm focus:border-[#8B3152] focus:outline-none"
-                />
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <div>
-                <label className="block text-xs font-semibold text-[#6E6266] mb-1">
-                  Free Shipping Threshold (₹)
-                </label>
-                <input
-                  type="number"
-                  value={settingsDraft.freeShippingThreshold}
-                  onChange={(e) =>
-                    setSettingsDraft({
-                      ...settingsDraft,
-                      freeShippingThreshold: Number(e.target.value),
-                    })
-                  }
-                  className="w-full rounded-xl border border-[#E6DDD7] bg-[#FBF7F3] px-3 py-2 text-sm tabular-nums focus:border-[#8B3152] focus:outline-none"
-                />
-              </div>
-              <div>
-                <label className="block text-xs font-semibold text-[#6E6266] mb-1">
-                  Gift Packaging Fee (₹)
-                </label>
-                <input
-                  type="number"
-                  value={settingsDraft.giftWrapFee}
-                  onChange={(e) =>
-                    setSettingsDraft({
-                      ...settingsDraft,
-                      giftWrapFee: Number(e.target.value),
-                    })
-                  }
-                  className="w-full rounded-xl border border-[#E6DDD7] bg-[#FBF7F3] px-3 py-2 text-sm tabular-nums focus:border-[#8B3152] focus:outline-none"
-                />
-              </div>
-            </div>
-
-            <label className="flex items-center gap-2.5 text-sm font-medium text-[#2A2225] cursor-pointer pt-1">
-              <input
-                type="checkbox"
-                checked={settingsDraft.codEnabled}
-                onChange={(e) =>
-                  setSettingsDraft({ ...settingsDraft, codEnabled: e.target.checked })
-                }
-                className="h-4 w-4 accent-[#8B3152]"
-              />
-              Enable Cash on Delivery (COD) at Checkout
-            </label>
-
-            {/* Automatic Admin WhatsApp Order Alerts */}
-            <div className="border-t border-[#F2EAE1] pt-4 space-y-3">
-              <div>
-                <h3 className="font-display text-xl font-semibold text-[#2A2225]">
-                  New Order WhatsApp Notifications
-                </h3>
-                <p className="text-xs text-[#6E6266] mt-0.5">
-                  Receive instant WhatsApp alerts for every new order &amp; custom enquiry without
-                  opening the admin website.
-                </p>
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-[#6E6266] mb-1">
-                  Alert Delivery Method
-                </label>
-                <select
-                  value={settingsDraft.whatsappAlertMode || 'manual'}
-                  onChange={(e) =>
-                    setSettingsDraft({
-                      ...settingsDraft,
-                      whatsappAlertMode: e.target.value as WhatsappAlertMode,
-                    })
-                  }
-                  className="w-full rounded-xl border border-[#E6DDD7] bg-[#FBF7F3] px-3 py-2 text-sm focus:border-[#8B3152] focus:outline-none"
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              {(
+                [
+                  {
+                    field: 'heroImageUrl' as const,
+                    title: 'Homepage Hero Main Photo',
+                    subtitle: 'Replaces default bouquet artwork on Hero card',
+                    val: settingsDraft.heroImageUrl || '',
+                  },
+                  {
+                    field: 'aboutStudioImageUrl1' as const,
+                    title: 'About Page — Studio Photo 1',
+                    subtitle: 'Shown in top founder/studio showcase card',
+                    val: settingsDraft.aboutStudioImageUrl1 || '',
+                  },
+                  {
+                    field: 'aboutStudioImageUrl2' as const,
+                    title: 'About Page — Studio Photo 2',
+                    subtitle: 'Shown in bottom crochet process card',
+                    val: settingsDraft.aboutStudioImageUrl2 || '',
+                  },
+                ] as const
+              ).map((slot) => (
+                <div
+                  key={slot.field}
+                  className="rounded-xl border border-[#EFE6DD] bg-[#FBF7F3] p-4 space-y-3 flex flex-col justify-between"
                 >
-                  <option value="manual">Customer Sends Order Summary on Checkout (No API needed)</option>
-                  <option value="callmebot">Automatic via CallMeBot WhatsApp (Free)</option>
-                  <option value="cloud-api">Automatic via Meta WhatsApp Cloud API (Official)</option>
-                  <option value="webhook">Automatic via Webhook URL (Make / Zapier / n8n)</option>
-                </select>
-              </div>
-
-              {settingsDraft.whatsappAlertMode === 'callmebot' && (
-                <div className="rounded-xl bg-[#FBF7F3] border border-[#E6DDD7] p-3.5 space-y-2">
-                  <label className="block text-xs font-semibold text-[#2A2225]">
-                    CallMeBot API Key
-                  </label>
-                  <input
-                    value={settingsDraft.callmebotApiKey || ''}
-                    onChange={(e) =>
-                      setSettingsDraft({ ...settingsDraft, callmebotApiKey: e.target.value })
-                    }
-                    placeholder="Enter CallMeBot API key"
-                    className="w-full rounded-xl border border-[#E6DDD7] bg-white px-3 py-2 text-xs font-mono focus:border-[#8B3152] focus:outline-none"
-                  />
-                  <p className="text-[11px] text-[#6E6266]">
-                    Alerts go directly to +{settingsDraft.whatsappNumber} on every checkout.
-                  </p>
-                </div>
-              )}
-
-              {settingsDraft.whatsappAlertMode === 'cloud-api' && (
-                <div className="rounded-xl bg-[#FBF7F3] border border-[#E6DDD7] p-3.5 space-y-2.5">
                   <div>
-                    <label className="block text-xs font-semibold text-[#2A2225] mb-1">
-                      WhatsApp Cloud Phone Number ID
-                    </label>
-                    <input
-                      value={settingsDraft.whatsappCloudPhoneId || ''}
-                      onChange={(e) =>
-                        setSettingsDraft({ ...settingsDraft, whatsappCloudPhoneId: e.target.value })
-                      }
-                      placeholder="e.g. 123456789012345"
-                      className="w-full rounded-xl border border-[#E6DDD7] bg-white px-3 py-2 text-xs font-mono focus:border-[#8B3152] focus:outline-none"
-                    />
+                    <p className="text-xs font-semibold text-[#2A2225]">{slot.title}</p>
+                    <p className="text-[11px] text-[#6E6266] mt-0.5">{slot.subtitle}</p>
                   </div>
-                  <div>
-                    <label className="block text-xs font-semibold text-[#2A2225] mb-1">
-                      Permanent Access Token
-                    </label>
-                    <input
-                      type="password"
-                      value={settingsDraft.whatsappCloudToken || ''}
-                      onChange={(e) =>
-                        setSettingsDraft({ ...settingsDraft, whatsappCloudToken: e.target.value })
-                      }
-                      placeholder="EAAG..."
-                      className="w-full rounded-xl border border-[#E6DDD7] bg-white px-3 py-2 text-xs font-mono focus:border-[#8B3152] focus:outline-none"
-                    />
-                  </div>
-                </div>
-              )}
-
-              {settingsDraft.whatsappAlertMode === 'webhook' && (
-                <div className="rounded-xl bg-[#FBF7F3] border border-[#E6DDD7] p-3.5 space-y-2">
-                  <label className="block text-xs font-semibold text-[#2A2225]">
-                    Order Alert Webhook URL
-                  </label>
-                  <input
-                    type="url"
-                    value={settingsDraft.orderWebhookUrl || ''}
-                    onChange={(e) =>
-                      setSettingsDraft({ ...settingsDraft, orderWebhookUrl: e.target.value })
-                    }
-                    placeholder="https://hook.eu2.make.com/..."
-                    className="w-full rounded-xl border border-[#E6DDD7] bg-white px-3 py-2 text-xs font-mono focus:border-[#8B3152] focus:outline-none"
-                  />
-                </div>
-              )}
-
-              {settingsDraft.whatsappAlertMode && settingsDraft.whatsappAlertMode !== 'manual' && (
-                <div className="space-y-2">
-                  <button
-                    type="button"
-                    onClick={handleTestWhatsAppAlert}
-                    disabled={testingAlert}
-                    className="inline-flex min-h-[38px] items-center gap-2 rounded-xl border border-[#51664A]/40 bg-[#E4EBE2] px-4 py-1.5 text-xs font-semibold text-[#3C4F36] hover:bg-[#D5E1D2] disabled:opacity-50"
-                  >
-                    <MessageCircle className="h-3.5 w-3.5" />
-                    {testingAlert ? 'Verifying Alert...' : 'Verify WhatsApp Alert'}
-                  </button>
-                  {alertTestResult && (
-                    <p
-                      className={`text-xs font-medium ${
-                        alertTestResult.status === 'Sent' ? 'text-[#51664A]' : 'text-[#8B3152]'
-                      }`}
-                    >
-                      {alertTestResult.status}: {alertTestResult.detail}
-                    </p>
+                  {slot.val ? (
+                    <div className="aspect-[4/3] overflow-hidden rounded-lg border border-[#E6DDD7] bg-white">
+                      <img src={slot.val} alt={slot.title} className="h-full w-full object-cover" />
+                    </div>
+                  ) : (
+                    <div className="aspect-[4/3] flex items-center justify-center rounded-lg border border-dashed border-[#D6C9C1] bg-white text-[11px] text-[#8E8185]">
+                      Using default studio image
+                    </div>
                   )}
+                  <div className="flex flex-wrap gap-2">
+                    <label className="inline-flex min-h-[36px] cursor-pointer items-center gap-1.5 rounded-xl border border-[#E6DDD7] bg-white px-3 py-1.5 text-xs font-semibold text-[#2A2225] hover:border-[#8B3152]">
+                      <Upload className="h-3.5 w-3.5 text-[#8B3152]" />
+                      {slot.val ? 'Replace' : 'Upload Photo'}
+                      <input
+                        type="file"
+                        accept="image/*"
+                        onChange={(e) => handleSettingsImageUpload(slot.field, e)}
+                        className="hidden"
+                      />
+                    </label>
+                    {slot.val && (
+                      <button
+                        type="button"
+                        onClick={() => setSettingsDraft({ ...settingsDraft, [slot.field]: '' })}
+                        className="inline-flex min-h-[36px] items-center gap-1 rounded-xl border border-[#E6DDD7] bg-white px-3 py-1.5 text-xs text-[#6E6266] hover:text-[#8B3152]"
+                      >
+                        <X className="h-3.5 w-3.5" />
+                        Reset
+                      </button>
+                    )}
+                  </div>
                 </div>
-              )}
+              ))}
             </div>
+          </div>
 
+          <div className="flex justify-end">
             <button
               type="submit"
               disabled={savingSettings}
-              className="w-full min-h-[44px] rounded-xl bg-[#8B3152] px-5 py-2.5 text-sm font-semibold text-white hover:bg-[#65213B] disabled:opacity-50"
+              className="min-h-[46px] rounded-xl bg-[#8B3152] px-8 py-2.5 text-sm font-semibold text-white hover:bg-[#65213B] disabled:opacity-50"
             >
-              {savingSettings ? 'Saving...' : 'Save Studio Settings'}
+              {savingSettings ? 'Saving Changes...' : 'Save All Permissions & Visuals'}
             </button>
-          </form>
+          </div>
+        </form>
+      )}
+
+      {/* Reviews, Alerts & Access Tab */}
+      {activeTab === 'settings' && store && settingsDraft && (
+        <div className="grid grid-cols-1 gap-8 lg:grid-cols-12">
+          {/* Left Column: Reviews Moderation + Backup/Restore */}
+          <div className="lg:col-span-6 space-y-6">
+            <div className="space-y-4">
+              <div className="flex items-center justify-between gap-2">
+                <h2 className="font-display text-2xl font-semibold text-[#2A2225]">
+                  Customer Reviews ({store.reviews.length})
+                </h2>
+                <span className="text-xs text-[#6E6266]">
+                  {store.reviews.filter((r) => !r.approved).length} awaiting approval
+                </span>
+              </div>
+              <div className="space-y-3">
+                {store.reviews.length === 0 ? (
+                  <p className="rounded-2xl border border-[#E6DDD7] bg-white p-6 text-sm text-[#6E6266]">
+                    No customer reviews yet. Reviews submitted on product pages appear here for moderation.
+                  </p>
+                ) : (
+                  store.reviews.map((rev) => (
+                    <div
+                      key={rev.id}
+                      className="rounded-2xl border border-[#E6DDD7] bg-white p-4 space-y-2"
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-1.5 text-xs font-semibold text-[#2A2225]">
+                          <Star className="h-3.5 w-3.5 fill-[#D8A24A] text-[#D8A24A]" />
+                          {rev.rating}.0 · {rev.author} ({rev.location})
+                        </div>
+                        <span
+                          className={`text-xs font-semibold ${
+                            rev.approved ? 'text-[#51664A]' : 'text-[#8B3152]'
+                          }`}
+                        >
+                          {rev.approved ? 'Published' : 'Pending Approval'}
+                        </span>
+                      </div>
+                      <p className="text-xs text-[#4E4347]">“{rev.comment}”</p>
+                      <div className="flex items-center gap-2 pt-1">
+                        <button
+                          type="button"
+                          onClick={() => handleToggleReviewApproval(rev)}
+                          className="rounded-lg border border-[#E6DDD7] bg-[#FBF7F3] px-3 py-1 text-xs font-semibold text-[#2A2225] hover:border-[#8B3152]"
+                        >
+                          {rev.approved ? 'Hide' : 'Approve & Publish'}
+                        </button>
+                        {confirmDeleteReviewId === rev.id ? (
+                          <>
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteReview(rev.id)}
+                              className="rounded-lg bg-[#8B3152] px-3 py-1 text-xs font-semibold text-white"
+                            >
+                              Confirm Delete
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setConfirmDeleteReviewId(null)}
+                              className="rounded-lg border border-[#E6DDD7] px-2.5 py-1 text-xs text-[#6E6266]"
+                            >
+                              Cancel
+                            </button>
+                          </>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => setConfirmDeleteReviewId(rev.id)}
+                            className="rounded-lg border border-[#E6DDD7] px-3 py-1 text-xs font-semibold text-[#6E6266] hover:text-[#8B3152]"
+                          >
+                            Delete
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+
+            {/* Studio Data Backup & Restore */}
+            <div className="rounded-2xl border border-[#E6DDD7] bg-white p-6 space-y-4">
+              <div>
+                <h2 className="font-display text-2xl font-semibold text-[#2A2225]">
+                  Studio Backup &amp; Restore
+                </h2>
+                <p className="text-xs text-[#6E6266] mt-0.5">
+                  Download a complete JSON snapshot of your products, orders, reviews, enquiries, and
+                  settings anytime before hosting updates.
+                </p>
+              </div>
+              <div className="flex flex-wrap gap-3">
+                <button
+                  type="button"
+                  disabled={exportingBackup}
+                  onClick={handleExportBackup}
+                  className="inline-flex min-h-[42px] items-center gap-2 rounded-xl bg-[#2A2225] px-4 py-2 text-xs font-semibold text-white hover:bg-[#8B3152] disabled:opacity-50"
+                >
+                  <Download className="h-3.5 w-3.5" />
+                  {exportingBackup ? 'Preparing...' : 'Download Studio Backup (.json)'}
+                </button>
+                <label className="inline-flex min-h-[42px] cursor-pointer items-center gap-2 rounded-xl border border-[#E6DDD7] bg-[#FBF7F3] px-4 py-2 text-xs font-semibold text-[#2A2225] hover:border-[#8B3152]">
+                  <Upload className="h-3.5 w-3.5 text-[#8B3152]" />
+                  Restore from Backup
+                  <input
+                    type="file"
+                    accept="application/json,.json"
+                    onChange={handleBackupFilePick}
+                    className="hidden"
+                  />
+                </label>
+              </div>
+
+              {pendingRestoreJson && (
+                <div className="rounded-xl border border-[#E6B8B8] bg-[#FDF2F2] p-4 space-y-2.5">
+                  <p className="text-xs font-semibold text-[#65213B]">
+                    Restore catalogue, orders &amp; settings from “{pendingRestoreJson.fileName}” (
+                    {pendingRestoreJson.data.products.length} products)? This replaces current store
+                    data while keeping your admin login intact.
+                  </p>
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      disabled={restoringBackup}
+                      onClick={handleConfirmRestore}
+                      className="min-h-[36px] rounded-xl bg-[#8B3152] px-4 py-1.5 text-xs font-semibold text-white hover:bg-[#65213B] disabled:opacity-50"
+                    >
+                      {restoringBackup ? 'Restoring...' : 'Confirm Restore'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setPendingRestoreJson(null)}
+                      className="min-h-[36px] rounded-xl border border-[#E6DDD7] bg-white px-3.5 py-1.5 text-xs font-medium text-[#6E6266]"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {backupError && <p className="text-xs font-medium text-[#9B2C2C]">{backupError}</p>}
+            </div>
+          </div>
+
+          {/* Right Column: Contact & WhatsApp Alerts + Admin Access Control */}
+          <div className="lg:col-span-6 space-y-6">
+            <form
+              onSubmit={handleSaveSettings}
+              className="rounded-2xl border border-[#E6DDD7] bg-white p-6 space-y-4"
+            >
+              <h2 className="font-display text-2xl font-semibold text-[#2A2225]">
+                Studio Contact &amp; WhatsApp Alerts
+              </h2>
+
+              <div>
+                <label className="block text-xs font-semibold text-[#6E6266] mb-1">
+                  WhatsApp Business Number (with country code)
+                </label>
+                <input
+                  value={settingsDraft.whatsappNumber}
+                  onChange={(e) =>
+                    setSettingsDraft({ ...settingsDraft, whatsappNumber: e.target.value })
+                  }
+                  className="w-full rounded-xl border border-[#E6DDD7] bg-[#FBF7F3] px-3 py-2 text-sm font-mono focus:border-[#8B3152] focus:outline-none"
+                />
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-[#6E6266] mb-1">
+                    Instagram Handle
+                  </label>
+                  <input
+                    value={settingsDraft.instagramHandle}
+                    onChange={(e) =>
+                      setSettingsDraft({ ...settingsDraft, instagramHandle: e.target.value })
+                    }
+                    className="w-full rounded-xl border border-[#E6DDD7] bg-[#FBF7F3] px-3 py-2 text-sm focus:border-[#8B3152] focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-[#6E6266] mb-1">
+                    Studio Email
+                  </label>
+                  <input
+                    value={settingsDraft.studioEmail}
+                    onChange={(e) =>
+                      setSettingsDraft({ ...settingsDraft, studioEmail: e.target.value })
+                    }
+                    className="w-full rounded-xl border border-[#E6DDD7] bg-[#FBF7F3] px-3 py-2 text-sm focus:border-[#8B3152] focus:outline-none"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-[#6E6266] mb-1">
+                  Studio Location Label
+                </label>
+                <input
+                  value={settingsDraft.studioCity}
+                  onChange={(e) =>
+                    setSettingsDraft({ ...settingsDraft, studioCity: e.target.value })
+                  }
+                  className="w-full rounded-xl border border-[#E6DDD7] bg-[#FBF7F3] px-3 py-2 text-sm focus:border-[#8B3152] focus:outline-none"
+                />
+              </div>
+
+              {/* Automatic Admin WhatsApp Order Alerts */}
+              <div className="border-t border-[#F2EAE1] pt-4 space-y-3">
+                <div>
+                  <h3 className="font-display text-xl font-semibold text-[#2A2225]">
+                    New Order WhatsApp Notifications
+                  </h3>
+                  <p className="text-xs text-[#6E6266] mt-0.5">
+                    Receive instant WhatsApp alerts for every new order &amp; custom enquiry without
+                    opening the admin website.
+                  </p>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-[#6E6266] mb-1">
+                    Alert Delivery Method
+                  </label>
+                  <select
+                    value={settingsDraft.whatsappAlertMode || 'manual'}
+                    onChange={(e) =>
+                      setSettingsDraft({
+                        ...settingsDraft,
+                        whatsappAlertMode: e.target.value as WhatsappAlertMode,
+                      })
+                    }
+                    className="w-full rounded-xl border border-[#E6DDD7] bg-[#FBF7F3] px-3 py-2 text-sm focus:border-[#8B3152] focus:outline-none"
+                  >
+                    <option value="manual">Customer Sends Order Summary on Checkout (No API needed)</option>
+                    <option value="callmebot">Automatic via CallMeBot WhatsApp (Free)</option>
+                    <option value="cloud-api">Automatic via Meta WhatsApp Cloud API (Official)</option>
+                    <option value="webhook">Automatic via Webhook URL (Make / Zapier / n8n)</option>
+                  </select>
+                </div>
+
+                {settingsDraft.whatsappAlertMode === 'callmebot' && (
+                  <div className="rounded-xl bg-[#FBF7F3] border border-[#E6DDD7] p-3.5 space-y-2">
+                    <label className="block text-xs font-semibold text-[#2A2225]">
+                      CallMeBot API Key
+                    </label>
+                    <input
+                      value={settingsDraft.callmebotApiKey || ''}
+                      onChange={(e) =>
+                        setSettingsDraft({ ...settingsDraft, callmebotApiKey: e.target.value })
+                      }
+                      placeholder="Enter CallMeBot API key"
+                      className="w-full rounded-xl border border-[#E6DDD7] bg-white px-3 py-2 text-xs font-mono focus:border-[#8B3152] focus:outline-none"
+                    />
+                    <p className="text-[11px] text-[#6E6266]">
+                      Alerts go directly to +{settingsDraft.whatsappNumber} on every checkout.
+                    </p>
+                  </div>
+                )}
+
+                {settingsDraft.whatsappAlertMode === 'cloud-api' && (
+                  <div className="rounded-xl bg-[#FBF7F3] border border-[#E6DDD7] p-3.5 space-y-2.5">
+                    <div>
+                      <label className="block text-xs font-semibold text-[#2A2225] mb-1">
+                        WhatsApp Cloud Phone Number ID
+                      </label>
+                      <input
+                        value={settingsDraft.whatsappCloudPhoneId || ''}
+                        onChange={(e) =>
+                          setSettingsDraft({
+                            ...settingsDraft,
+                            whatsappCloudPhoneId: e.target.value,
+                          })
+                        }
+                        placeholder="e.g. 123456789012345"
+                        className="w-full rounded-xl border border-[#E6DDD7] bg-white px-3 py-2 text-xs font-mono focus:border-[#8B3152] focus:outline-none"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-[#2A2225] mb-1">
+                        Permanent Access Token
+                      </label>
+                      <input
+                        type="password"
+                        value={settingsDraft.whatsappCloudToken || ''}
+                        onChange={(e) =>
+                          setSettingsDraft({
+                            ...settingsDraft,
+                            whatsappCloudToken: e.target.value,
+                          })
+                        }
+                        placeholder="EAAG..."
+                        className="w-full rounded-xl border border-[#E6DDD7] bg-white px-3 py-2 text-xs font-mono focus:border-[#8B3152] focus:outline-none"
+                      />
+                    </div>
+                  </div>
+                )}
+
+                {settingsDraft.whatsappAlertMode === 'webhook' && (
+                  <div className="rounded-xl bg-[#FBF7F3] border border-[#E6DDD7] p-3.5 space-y-2">
+                    <label className="block text-xs font-semibold text-[#2A2225]">
+                      Order Alert Webhook URL
+                    </label>
+                    <input
+                      type="url"
+                      value={settingsDraft.orderWebhookUrl || ''}
+                      onChange={(e) =>
+                        setSettingsDraft({ ...settingsDraft, orderWebhookUrl: e.target.value })
+                      }
+                      placeholder="https://hook.eu2.make.com/..."
+                      className="w-full rounded-xl border border-[#E6DDD7] bg-white px-3 py-2 text-xs font-mono focus:border-[#8B3152] focus:outline-none"
+                    />
+                  </div>
+                )}
+
+                {settingsDraft.whatsappAlertMode && settingsDraft.whatsappAlertMode !== 'manual' && (
+                  <div className="space-y-2">
+                    <button
+                      type="button"
+                      onClick={handleTestWhatsAppAlert}
+                      disabled={testingAlert}
+                      className="inline-flex min-h-[38px] items-center gap-2 rounded-xl border border-[#51664A]/40 bg-[#E4EBE2] px-4 py-1.5 text-xs font-semibold text-[#3C4F36] hover:bg-[#D5E1D2] disabled:opacity-50"
+                    >
+                      <MessageCircle className="h-3.5 w-3.5" />
+                      {testingAlert ? 'Verifying Alert...' : 'Verify WhatsApp Alert'}
+                    </button>
+                    {alertTestResult && (
+                      <p
+                        className={`text-xs font-medium ${
+                          alertTestResult.status === 'Sent' ? 'text-[#51664A]' : 'text-[#8B3152]'
+                        }`}
+                      >
+                        {alertTestResult.status}: {alertTestResult.detail}
+                      </p>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              <button
+                type="submit"
+                disabled={savingSettings}
+                className="w-full min-h-[44px] rounded-xl bg-[#8B3152] px-5 py-2.5 text-sm font-semibold text-white hover:bg-[#65213B] disabled:opacity-50"
+              >
+                {savingSettings ? 'Saving...' : 'Save Contact & Alert Settings'}
+              </button>
+            </form>
+
+            {/* Admin Access & Password Management */}
+            <div className="rounded-2xl border border-[#E6DDD7] bg-white p-6 space-y-4">
+              <div className="flex items-center gap-2">
+                <KeyRound className="h-5 w-5 text-[#8B3152]" />
+                <div>
+                  <h2 className="font-display text-2xl font-semibold text-[#2A2225]">
+                    Admin Login &amp; Access
+                  </h2>
+                  <p className="text-xs text-[#6E6266]">
+                    Signed in as{' '}
+                    <span className="font-mono font-semibold text-[#2A2225]">
+                      {store.adminUsername || 'admin'}
+                    </span>
+                  </p>
+                </div>
+              </div>
+
+              {store.envManagedCredentials ? (
+                <p className="rounded-xl border border-[#EFE6DD] bg-[#FBF7F3] p-4 text-xs leading-relaxed text-[#574D50]">
+                  Your admin username and password are managed via your hosting environment secrets (
+                  <span className="font-mono font-semibold">ADMIN_USERNAME</span> /{' '}
+                  <span className="font-mono font-semibold">ADMIN_PASSWORD</span>). Update them in
+                  your host’s Environment / Secrets settings anytime.
+                </p>
+              ) : (
+                <form onSubmit={handleChangeCredentials} className="space-y-3">
+                  <div>
+                    <label className="block text-xs font-semibold text-[#6E6266] mb-1">
+                      Current Password
+                    </label>
+                    <input
+                      type="password"
+                      required
+                      value={credCurrentPassword}
+                      onChange={(e) => setCredCurrentPassword(e.target.value)}
+                      placeholder="Enter current admin password"
+                      className="w-full rounded-xl border border-[#E6DDD7] bg-[#FBF7F3] px-3 py-2 text-sm focus:border-[#8B3152] focus:outline-none"
+                    />
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs font-semibold text-[#6E6266] mb-1">
+                        New Admin Username
+                      </label>
+                      <input
+                        required
+                        minLength={3}
+                        value={credNewUsername}
+                        onChange={(e) => setCredNewUsername(e.target.value)}
+                        className="w-full rounded-xl border border-[#E6DDD7] bg-[#FBF7F3] px-3 py-2 text-sm focus:border-[#8B3152] focus:outline-none"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-[#6E6266] mb-1">
+                        New Password (min 6 chars)
+                      </label>
+                      <input
+                        type="password"
+                        required
+                        minLength={6}
+                        value={credNewPassword}
+                        onChange={(e) => setCredNewPassword(e.target.value)}
+                        placeholder="Enter new password"
+                        className="w-full rounded-xl border border-[#E6DDD7] bg-[#FBF7F3] px-3 py-2 text-sm focus:border-[#8B3152] focus:outline-none"
+                      />
+                    </div>
+                  </div>
+                  {credMsg && (
+                    <p
+                      className={`text-xs font-medium ${
+                        credMsg.type === 'ok' ? 'text-[#51664A]' : 'text-[#9B2C2C]'
+                      }`}
+                    >
+                      {credMsg.text}
+                    </p>
+                  )}
+                  <button
+                    type="submit"
+                    disabled={savingCreds}
+                    className="min-h-[42px] rounded-xl bg-[#2A2225] px-5 py-2 text-xs font-semibold text-white hover:bg-[#8B3152] disabled:opacity-50"
+                  >
+                    {savingCreds ? 'Updating...' : 'Update Admin Login'}
+                  </button>
+                </form>
+              )}
+            </div>
+          </div>
         </div>
       )}
     </div>

@@ -557,8 +557,21 @@
     "studioEmail": "hello@thecrochetingera.in",
     "studioCity": "Maharashtra, India",
     "codEnabled": true,
+    "upiEnabled": true,
+    "upiId": "",
+    "upiPayeeName": "The Crocheting Era",
+    "upiQrImageUrl": "",
+    "giftWrapEnabled": true,
     "freeShippingThreshold": 999,
+    "shippingFee": 79,
     "giftWrapFee": 75,
+    "allowCustomOrders": true,
+    "allowCustomerReviews": true,
+    "autoApproveReviews": true,
+    "heroImageUrl": "",
+    "heroBadgeText": "Handcrafted Crochet Studio · Maharashtra",
+    "aboutStudioImageUrl1": "",
+    "aboutStudioImageUrl2": "",
     "whatsappAlertMode": "manual"
   }
 }

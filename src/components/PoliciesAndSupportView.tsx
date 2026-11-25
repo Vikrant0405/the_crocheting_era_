@@ -2,12 +2,14 @@ import React, { useEffect, useState } from 'react';
 import {
   CheckCircle2,
   ChevronDown,
+  ExternalLink,
   Instagram,
   Mail,
   MapPin,
   MessageCircle,
   PackageCheck,
   Search,
+  Truck,
 } from 'lucide-react';
 import type { OrderStatus, StudioSettings } from '../types';
 import { buildWhatsAppUrl, formatINR } from '../utils/studio';
@@ -33,6 +35,9 @@ interface TrackedOrder {
   total: number;
   paymentMethod: string;
   status: OrderStatus;
+  courierName?: string;
+  trackingNumber?: string;
+  trackingUrl?: string;
   giftWrap: boolean;
   createdAt: string;
 }
@@ -261,6 +266,39 @@ export const PoliciesAndSupportView: React.FC<PoliciesAndSupportViewProps> = ({
                 })}
               </div>
 
+              {(trackedOrder.courierName || trackedOrder.trackingNumber || trackedOrder.trackingUrl) && (
+                <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[#51664A]/30 bg-[#E4EBE2]/55 p-4 text-xs">
+                  <div className="flex items-start gap-2.5">
+                    <Truck className="h-4 w-4 text-[#51664A] mt-0.5 shrink-0" />
+                    <div>
+                      <p className="font-semibold text-[#2A2225]">
+                        Courier Dispatch Details
+                      </p>
+                      <p className="text-[#4E4347] mt-0.5">
+                        {[
+                          trackedOrder.courierName,
+                          trackedOrder.trackingNumber ? `AWB: ${trackedOrder.trackingNumber}` : '',
+                        ]
+                          .filter(Boolean)
+                          .join(' · ')}
+                      </p>
+                    </div>
+                  </div>
+                  {trackedOrder.trackingUrl &&
+                    /^https?:\/\//i.test(trackedOrder.trackingUrl) && (
+                      <a
+                        href={trackedOrder.trackingUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1.5 rounded-lg bg-[#51664A] px-3.5 py-2 text-xs font-semibold text-white hover:bg-[#3C4F36]"
+                      >
+                        Track Shipment
+                        <ExternalLink className="h-3.5 w-3.5" />
+                      </a>
+                    )}
+                </div>
+              )}
+
               <div className="space-y-2 border-t border-[#F2EAE1] pt-4 text-sm">
                 {trackedOrder.items.map((item, idx) => (
                   <div key={idx} className="flex justify-between text-xs text-[#4E4347]">
@@ -296,6 +334,15 @@ export const PoliciesAndSupportView: React.FC<PoliciesAndSupportViewProps> = ({
         <div className="space-y-3">
           {FAQS.map((item, idx) => {
             const open = openFaq === idx;
+            const paymentSummary =
+              [
+                settings.upiEnabled !== false ? 'UPI, Google Pay, PhonePe, Paytm' : null,
+                settings.codEnabled ? 'Cash on Delivery' : null,
+              ]
+                .filter(Boolean)
+                .join(' and ') || 'direct studio WhatsApp payment confirmation';
+            const answer =
+              idx === 4 ? `We currently support ${paymentSummary} across India.` : item.a;
             return (
               <div
                 key={item.q}
@@ -315,7 +362,7 @@ export const PoliciesAndSupportView: React.FC<PoliciesAndSupportViewProps> = ({
                 </button>
                 {open && (
                   <div className="border-t border-[#F2EAE1] px-6 py-4 text-sm leading-relaxed text-[#574D50]">
-                    {item.a}
+                    {answer}
                   </div>
                 )}
               </div>

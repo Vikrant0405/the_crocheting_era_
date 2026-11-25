@@ -29,6 +29,8 @@ interface ProductDetailViewProps {
   onAddToCart: (product: Product, color: ColorOption, quantity: number, customNote?: string) => void;
   onBuyNow: (product: Product, color: ColorOption, quantity: number, customNote?: string) => void;
   onReviewSubmitted: (review: Review) => void;
+  allowCustomerReviews?: boolean;
+  autoApproveReviews?: boolean;
 }
 
 export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
@@ -43,6 +45,8 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
   onAddToCart,
   onBuyNow,
   onReviewSubmitted,
+  allowCustomerReviews = true,
+  autoApproveReviews = true,
 }) => {
   const [selectedColor, setSelectedColor] = useState<ColorOption>(
     product.colors[0] || { name: 'Blush Rose', hex: '#E3A1B4', accentHex: '#8B3152' }
@@ -109,12 +113,16 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
       const data = await res.json();
       if (res.ok) {
         const created: Review = data;
-        onReviewSubmitted(created);
+        if (created.approved) {
+          onReviewSubmitted(created);
+          setRevFeedback('Thank you! Your handmade review has been published.');
+        } else {
+          setRevFeedback('Thank you! Your review has been received and will appear once approved by our studio.');
+        }
         setRevAuthor('');
         setRevLocation('');
         setRevComment('');
         setRevRating(5);
-        setRevFeedback('Thank you! Your handmade review has been published.');
       } else {
         setRevError(true);
         setRevFeedback(data.error || 'Could not submit your review. Please try again.');
@@ -449,92 +457,111 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
           </div>
 
           <div className="lg:col-span-5">
-            <form
-              onSubmit={handleReviewSubmit}
-              className="rounded-2xl border border-[#E6DDD7] bg-white p-6 space-y-4"
-            >
-              <h3 className="font-display text-2xl font-semibold text-[#2A2225]">
-                Share a Review
-              </h3>
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-semibold text-[#6E6266] mb-1">
-                    Your Name
-                  </label>
-                  <input
-                    required
-                    value={revAuthor}
-                    onChange={(e) => setRevAuthor(e.target.value)}
-                    placeholder="Your name"
-                    className="w-full rounded-xl border border-[#E6DDD7] bg-[#FBF7F3] px-3 py-2 text-sm focus:border-[#8B3152] focus:outline-none"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-semibold text-[#6E6266] mb-1">
-                    City
-                  </label>
-                  <input
-                    value={revLocation}
-                    onChange={(e) => setRevLocation(e.target.value)}
-                    placeholder="Your city"
-                    className="w-full rounded-xl border border-[#E6DDD7] bg-[#FBF7F3] px-3 py-2 text-sm focus:border-[#8B3152] focus:outline-none"
-                  />
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-[#6E6266] mb-1">
-                  Rating
-                </label>
-                <div className="flex items-center gap-1.5">
-                  {[1, 2, 3, 4, 5].map((star) => (
-                    <button
-                      key={star}
-                      type="button"
-                      onClick={() => setRevRating(star)}
-                      aria-label={`Rate ${star} stars`}
-                      className="p-1"
-                    >
-                      <Star
-                        className={`h-5 w-5 ${
-                          star <= revRating
-                            ? 'fill-[#D8A24A] text-[#D8A24A]'
-                            : 'text-[#DCD0C9]'
-                        }`}
-                      />
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-[#6E6266] mb-1">
-                  Your Review
-                </label>
-                <textarea
-                  required
-                  rows={3}
-                  value={revComment}
-                  onChange={(e) => setRevComment(e.target.value)}
-                  placeholder="How did the yarn softness, colours, and gift wrapping feel?"
-                  className="w-full rounded-xl border border-[#E6DDD7] bg-[#FBF7F3] px-3 py-2 text-sm focus:border-[#8B3152] focus:outline-none"
-                />
-              </div>
-
-              {revFeedback && (
-                <p className={`text-xs font-medium ${revError ? 'text-[#9B2C2C]' : 'text-[#51664A]'}`}>
-                  {revFeedback}
-                </p>
-              )}
-
-              <button
-                type="submit"
-                disabled={revSubmitting}
-                className="w-full min-h-[44px] rounded-xl bg-[#2A2225] px-4 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-[#8B3152] disabled:opacity-50"
+            {allowCustomerReviews ? (
+              <form
+                onSubmit={handleReviewSubmit}
+                className="rounded-2xl border border-[#E6DDD7] bg-white p-6 space-y-4"
               >
-                {revSubmitting ? 'Publishing...' : 'Submit Review'}
-              </button>
-            </form>
+                <div className="flex items-center justify-between gap-2">
+                  <h3 className="font-display text-2xl font-semibold text-[#2A2225]">
+                    Share a Review
+                  </h3>
+                  {!autoApproveReviews && (
+                    <span className="text-[11px] font-medium text-[#6E6266]">
+                      Moderated by studio
+                    </span>
+                  )}
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs font-semibold text-[#6E6266] mb-1">
+                      Your Name
+                    </label>
+                    <input
+                      required
+                      value={revAuthor}
+                      onChange={(e) => setRevAuthor(e.target.value)}
+                      placeholder="Your name"
+                      className="w-full rounded-xl border border-[#E6DDD7] bg-[#FBF7F3] px-3 py-2 text-sm focus:border-[#8B3152] focus:outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-[#6E6266] mb-1">
+                      City
+                    </label>
+                    <input
+                      value={revLocation}
+                      onChange={(e) => setRevLocation(e.target.value)}
+                      placeholder="Your city"
+                      className="w-full rounded-xl border border-[#E6DDD7] bg-[#FBF7F3] px-3 py-2 text-sm focus:border-[#8B3152] focus:outline-none"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-[#6E6266] mb-1">
+                    Rating
+                  </label>
+                  <div className="flex items-center gap-1.5">
+                    {[1, 2, 3, 4, 5].map((star) => (
+                      <button
+                        key={star}
+                        type="button"
+                        onClick={() => setRevRating(star)}
+                        aria-label={`Rate ${star} stars`}
+                        className="p-1"
+                      >
+                        <Star
+                          className={`h-5 w-5 ${
+                            star <= revRating
+                              ? 'fill-[#D8A24A] text-[#D8A24A]'
+                              : 'text-[#DCD0C9]'
+                          }`}
+                        />
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-[#6E6266] mb-1">
+                    Your Review
+                  </label>
+                  <textarea
+                    required
+                    rows={3}
+                    value={revComment}
+                    onChange={(e) => setRevComment(e.target.value)}
+                    placeholder="How did the yarn softness, colours, and gift wrapping feel?"
+                    className="w-full rounded-xl border border-[#E6DDD7] bg-[#FBF7F3] px-3 py-2 text-sm focus:border-[#8B3152] focus:outline-none"
+                  />
+                </div>
+
+                {revFeedback && (
+                  <p className={`text-xs font-medium ${revError ? 'text-[#9B2C2C]' : 'text-[#51664A]'}`}>
+                    {revFeedback}
+                  </p>
+                )}
+
+                <button
+                  type="submit"
+                  disabled={revSubmitting}
+                  className="w-full min-h-[44px] rounded-xl bg-[#2A2225] px-4 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-[#8B3152] disabled:opacity-50"
+                >
+                  {revSubmitting ? 'Publishing...' : 'Submit Review'}
+                </button>
+              </form>
+            ) : (
+              <div className="rounded-2xl border border-[#E6DDD7] bg-white p-6 space-y-2">
+                <h3 className="font-display text-2xl font-semibold text-[#2A2225]">
+                  Reviews Temporarily Paused
+                </h3>
+                <p className="text-sm text-[#6E6266]">
+                  New review submissions are currently paused by the studio owner. You can still share
+                  feedback anytime via WhatsApp!
+                </p>
+              </div>
+            )}
           </div>
         </div>
       </section>

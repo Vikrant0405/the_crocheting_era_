@@ -4,12 +4,16 @@ import { buildWhatsAppUrl } from '../utils/studio';
 
 interface AboutViewProps {
   whatsappNumber: string;
+  studioImage1?: string;
+  studioImage2?: string;
   onNavigateShop: () => void;
   onNavigateCustom: () => void;
 }
 
 export const AboutView: React.FC<AboutViewProps> = ({
   whatsappNumber,
+  studioImage1,
+  studioImage2,
   onNavigateShop,
   onNavigateCustom,
 }) => {
@@ -58,10 +62,14 @@ export const AboutView: React.FC<AboutViewProps> = ({
           <div className="rounded-2xl border border-[#E6DDD7] bg-[#F4DCE2]/35 p-5 flex flex-col justify-between min-h-[300px]">
             <div className="aspect-[4/3] w-full overflow-hidden rounded-xl bg-white border border-[#E6DDD7]">
               <img
-                src="/assets/images/7-handmade-crochet-detail.jpg"
+                src={studioImage1 || '/assets/images/7-handmade-crochet-detail.jpg'}
                 alt="Handcrafted crochet peacock motif from the studio"
                 referrerPolicy="no-referrer"
-                className="h-full w-full object-cover object-top scale-[1.35]"
+                className={
+                  studioImage1
+                    ? 'h-full w-full object-cover'
+                    : 'h-full w-full object-cover object-top scale-[1.35]'
+                }
               />
             </div>
             <div className="mt-4">
@@ -77,10 +85,14 @@ export const AboutView: React.FC<AboutViewProps> = ({
           <div className="rounded-2xl border border-[#E6DDD7] bg-[#E4EBE2]/45 p-5 flex flex-col justify-between min-h-[300px] mt-6 sm:mt-8">
             <div className="aspect-[4/3] w-full overflow-hidden rounded-xl bg-white border border-[#E6DDD7]">
               <img
-                src="/assets/images/2-crochet-flower-ring.jpg"
+                src={studioImage2 || '/assets/images/2-crochet-flower-ring.jpg'}
                 alt="Handmade ruffled crochet scrunchie craft"
                 referrerPolicy="no-referrer"
-                className="h-full w-full object-cover object-bottom scale-[1.35]"
+                className={
+                  studioImage2
+                    ? 'h-full w-full object-cover'
+                    : 'h-full w-full object-cover object-bottom scale-[1.35]'
+                }
               />
             </div>
             <div className="mt-4">

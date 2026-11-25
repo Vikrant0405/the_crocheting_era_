@@ -12,10 +12,58 @@ dotenv.config();
 const PORT = Number(process.env.PORT) || 3000;
 const DATA_DIR = path.resolve(process.cwd(), 'data');
 const STORE_PATH = path.join(DATA_DIR, 'store.json');
-const ADMIN_USERNAME = process.env.ADMIN_USERNAME || 'admin';
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || process.env.ADMIN_PASSCODE || 'wool2026';
+const ENV_ADMIN_USERNAME = (process.env.ADMIN_USERNAME || 'admin').trim();
+const ENV_ADMIN_PASSWORD = (process.env.ADMIN_PASSWORD || process.env.ADMIN_PASSCODE || '').trim();
 const SESSION_TTL_MS = 2 * 60 * 60 * 1000;
 const adminSessions = new Map<string, number>();
+
+function hashPasswordScrypt(password: string, salt?: string): { hash: string; salt: string } {
+  const usedSalt = salt || crypto.randomBytes(16).toString('hex');
+  const derived = crypto.scryptSync(password, usedSalt, 64).toString('hex');
+  return { hash: derived, salt: usedSalt };
+}
+
+function verifyScryptPassword(password: string, storedHash: string, salt: string): boolean {
+  const { hash } = hashPasswordScrypt(password, salt);
+  const a = Buffer.from(hash, 'hex');
+  const b = Buffer.from(storedHash, 'hex');
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+
+function isSafeHttpUrl(raw?: string): boolean {
+  if (!raw) return false;
+  try {
+    const parsed = new URL(raw);
+    return parsed.protocol === 'https:' || parsed.protocol === 'http:';
+  } catch {
+    return false;
+  }
+}
+
+function isSafeWebhookUrl(raw?: string): boolean {
+  if (!raw) return false;
+  try {
+    const parsed = new URL(raw);
+    if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') return false;
+    const host = parsed.hostname.toLowerCase();
+    if (process.env.NODE_ENV === 'production') {
+      if (
+        host === 'localhost' ||
+        host === '127.0.0.1' ||
+        host === '::1' ||
+        host === '169.254.169.254' ||
+        host.startsWith('10.') ||
+        host.startsWith('192.168.') ||
+        /^172\.(1[6-9]|2\d|3[01])\./.test(host)
+      ) {
+        return false;
+      }
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 function ensureStore(): StoreData {
   if (!fs.existsSync(DATA_DIR)) {
@@ -35,6 +83,7 @@ function ensureStore(): StoreData {
       enquiries: parsed.enquiries ?? INITIAL_STORE.enquiries,
       newsletter: parsed.newsletter ?? INITIAL_STORE.newsletter,
       settings: { ...INITIAL_STORE.settings, ...(parsed.settings ?? {}) },
+      adminAuth: parsed.adminAuth,
     };
   } catch {
     fs.writeFileSync(STORE_PATH, JSON.stringify(INITIAL_STORE, null, 2), 'utf8');
@@ -68,8 +117,21 @@ function getPublicSettings(settings: StudioSettings): StudioSettings {
     studioEmail: settings.studioEmail,
     studioCity: settings.studioCity,
     codEnabled: settings.codEnabled,
+    upiEnabled: settings.upiEnabled !== false,
+    upiId: settings.upiId || '',
+    upiPayeeName: settings.upiPayeeName || 'The Crocheting Era',
+    upiQrImageUrl: settings.upiQrImageUrl || '',
+    giftWrapEnabled: settings.giftWrapEnabled !== false,
     freeShippingThreshold: settings.freeShippingThreshold,
+    shippingFee: settings.shippingFee ?? 79,
     giftWrapFee: settings.giftWrapFee,
+    allowCustomOrders: settings.allowCustomOrders !== false,
+    allowCustomerReviews: settings.allowCustomerReviews !== false,
+    autoApproveReviews: settings.autoApproveReviews !== false,
+    heroImageUrl: settings.heroImageUrl || '',
+    heroBadgeText: settings.heroBadgeText || 'Handcrafted Crochet Studio · Maharashtra',
+    aboutStudioImageUrl1: settings.aboutStudioImageUrl1 || '',
+    aboutStudioImageUrl2: settings.aboutStudioImageUrl2 || '',
   };
 }
 
@@ -79,7 +141,7 @@ function formatAdminOrderMessage(order: Order): string {
     `Customer: ${order.customerName}`,
     `Phone: ${order.phone}`,
     `Address: ${order.address}, ${order.city}, ${order.state} - ${order.pincode}`,
-    `Payment: ${order.paymentMethod}`,
+    `Payment: ${order.paymentMethod}${order.upiTransactionId ? ` (UTR: ${order.upiTransactionId})` : ''}`,
     '',
     'Items:',
     ...order.items.map(
@@ -155,7 +217,7 @@ async function dispatchAdminWhatsAppAlert(
       return { status: 'Sent', detail: 'Sent via Meta WhatsApp Cloud API' };
     }
 
-    if ((mode === 'webhook' || (!settings.whatsappAlertMode && webhookUrl)) && webhookUrl) {
+    if ((mode === 'webhook' || (!settings.whatsappAlertMode && webhookUrl)) && isSafeWebhookUrl(webhookUrl)) {
       const resp = await fetch(webhookUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -218,6 +280,19 @@ async function startServer() {
       return;
     }
 
+    const paymentMethod = String(body.paymentMethod || 'UPI').trim() as Order['paymentMethod'];
+    if (/cash on delivery/i.test(paymentMethod) && !store.settings.codEnabled) {
+      res.status(400).json({ error: 'Cash on Delivery is currently disabled.' });
+      return;
+    }
+    if (
+      /upi|google pay|phonepe|paytm/i.test(paymentMethod) &&
+      store.settings.upiEnabled === false
+    ) {
+      res.status(400).json({ error: 'UPI payments are currently disabled.' });
+      return;
+    }
+
     let subtotal = 0;
     for (const item of body.items) {
       const product = store.products.find((p) => p.id === item.productId);
@@ -246,9 +321,10 @@ async function startServer() {
       }
     }
 
-    const giftWrap = Boolean(body.giftWrap);
+    const giftWrap = store.settings.giftWrapEnabled !== false && Boolean(body.giftWrap);
     const giftFee = giftWrap ? store.settings.giftWrapFee : 0;
-    const shippingFee = subtotal >= store.settings.freeShippingThreshold ? 0 : 79;
+    const flatShipping = Number(store.settings.shippingFee ?? 79);
+    const shippingFee = subtotal >= store.settings.freeShippingThreshold ? 0 : flatShipping;
     const total = Math.max(0, subtotal + giftFee + shippingFee);
 
     const maxOrderNum = store.orders.reduce((max, o) => {
@@ -267,10 +343,11 @@ async function startServer() {
       items: body.items,
       subtotal,
       giftWrap,
-      giftMessage: body.giftMessage ? String(body.giftMessage).trim() : undefined,
+      giftMessage: giftWrap && body.giftMessage ? String(body.giftMessage).trim() : undefined,
       shippingFee,
       total,
-      paymentMethod: body.paymentMethod || 'UPI',
+      paymentMethod,
+      upiTransactionId: body.upiTransactionId ? String(body.upiTransactionId).trim().slice(0, 64) : undefined,
       status: 'Pending',
       createdAt: new Date().toISOString(),
     };
@@ -303,6 +380,9 @@ async function startServer() {
       total: order.total,
       paymentMethod: order.paymentMethod,
       status: order.status,
+      courierName: order.courierName,
+      trackingNumber: order.trackingNumber,
+      trackingUrl: order.trackingUrl,
       giftWrap: order.giftWrap,
       createdAt: order.createdAt,
     });
@@ -311,6 +391,16 @@ async function startServer() {
   app.post('/api/enquiries', async (req, res) => {
     const store = ensureStore();
     const body = req.body;
+    const enqType = body.type || 'Custom Order';
+    if (
+      (enqType === 'Custom Order' || enqType === 'Bulk Order') &&
+      store.settings.allowCustomOrders === false
+    ) {
+      res.status(403).json({
+        error: 'Custom crochet orders are currently paused. Please check back soon or message us on WhatsApp.',
+      });
+      return;
+    }
     if (!body?.customerName || !body?.phone || !body?.requirements) {
       res.status(400).json({ error: 'Name, phone number, and requirements are required.' });
       return;
@@ -321,7 +411,7 @@ async function startServer() {
     }, 100);
     const newEnquiry: Enquiry = {
       id: `ENQ-2026-${maxEnqNum + 1}`,
-      type: body.type || 'Custom Order',
+      type: enqType,
       customerName: String(body.customerName).trim(),
       phone: String(body.phone).trim(),
       productType: body.productType ? String(body.productType) : undefined,
@@ -345,12 +435,17 @@ async function startServer() {
 
   app.post('/api/reviews', (req, res) => {
     const store = ensureStore();
+    if (store.settings.allowCustomerReviews === false) {
+      res.status(403).json({ error: 'Customer review submissions are currently paused by the studio.' });
+      return;
+    }
     const body = req.body;
     if (!body?.author || !body?.comment) {
       res.status(400).json({ error: 'Your name and review message are required.' });
       return;
     }
     const rating = Math.min(5, Math.max(1, Number(body.rating || 5)));
+    const autoApprove = store.settings.autoApproveReviews !== false;
     const newReview: Review = {
       id: `rev-${Date.now()}`,
       productId: body.productId,
@@ -360,15 +455,22 @@ async function startServer() {
       rating,
       comment: String(body.comment).trim(),
       createdAt: new Date().toISOString().slice(0, 10),
-      approved: true,
+      approved: autoApprove,
     };
     store.reviews.unshift(newReview);
-    if (body.productId) {
+    if (body.productId && autoApprove) {
       const prod = store.products.find((p) => p.id === body.productId);
       if (prod) {
-        const totalScore = prod.rating * prod.reviewCount + rating;
-        prod.reviewCount += 1;
-        prod.rating = Number((totalScore / prod.reviewCount).toFixed(1));
+        const approvedProductReviews = store.reviews.filter(
+          (r) => r.productId === prod.id && r.approved
+        );
+        prod.reviewCount = approvedProductReviews.length;
+        prod.rating = Number(
+          (
+            approvedProductReviews.reduce((sum, r) => sum + r.rating, 0) /
+            approvedProductReviews.length
+          ).toFixed(1)
+        );
       }
     }
     saveStore(store);
@@ -390,21 +492,101 @@ async function startServer() {
   });
 
   // Admin Routes
+  app.get('/api/admin/auth-status', (_req, res) => {
+    const store = ensureStore();
+    const envManaged = Boolean(ENV_ADMIN_PASSWORD);
+    const needsSetup = !envManaged && !store.adminAuth;
+    res.json({ envManaged, needsSetup });
+  });
+
+  app.post('/api/admin/setup', (req, res) => {
+    const store = ensureStore();
+    if (ENV_ADMIN_PASSWORD || store.adminAuth) {
+      res.status(409).json({ error: 'Admin access is already configured.' });
+      return;
+    }
+    const username = String(req.body?.username || '').trim();
+    const password = String(req.body?.password || '').trim();
+    if (username.length < 3 || password.length < 6) {
+      res.status(400).json({
+        error: 'Username must be at least 3 characters and password at least 6 characters.',
+      });
+      return;
+    }
+    const { hash, salt } = hashPasswordScrypt(password);
+    store.adminAuth = { username, passwordHash: hash, salt };
+    saveStore(store);
+    const token = crypto.randomBytes(32).toString('hex');
+    adminSessions.set(token, Date.now() + SESSION_TTL_MS);
+    res.status(201).json({ token });
+  });
+
   app.post('/api/admin/login', (req, res) => {
+    const store = ensureStore();
     const username = String(req.body?.username || '').trim();
     const password = String(req.body?.password || req.body?.passcode || '').trim();
-    if (
-      !username ||
-      !password ||
-      username.toLowerCase() !== ADMIN_USERNAME.toLowerCase() ||
-      password !== ADMIN_PASSWORD
-    ) {
+    if (!username || !password) {
+      res.status(401).json({ error: 'Invalid admin username or password.' });
+      return;
+    }
+
+    let valid = false;
+    if (ENV_ADMIN_PASSWORD) {
+      valid =
+        username.toLowerCase() === ENV_ADMIN_USERNAME.toLowerCase() &&
+        password === ENV_ADMIN_PASSWORD;
+    } else if (store.adminAuth) {
+      valid =
+        username.toLowerCase() === store.adminAuth.username.toLowerCase() &&
+        verifyScryptPassword(password, store.adminAuth.passwordHash, store.adminAuth.salt);
+    } else {
+      res.status(409).json({ error: 'First-time admin setup is required.' });
+      return;
+    }
+
+    if (!valid) {
       res.status(401).json({ error: 'Invalid admin username or password.' });
       return;
     }
     const token = crypto.randomBytes(32).toString('hex');
     adminSessions.set(token, Date.now() + SESSION_TTL_MS);
     res.json({ token });
+  });
+
+  app.post('/api/admin/change-credentials', (req, res) => {
+    if (!isAdmin(req)) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+    if (ENV_ADMIN_PASSWORD) {
+      res.status(400).json({
+        error:
+          'Admin credentials are managed by your hosting environment secrets (ADMIN_USERNAME / ADMIN_PASSWORD). Update them in your host Secrets panel.',
+      });
+      return;
+    }
+    const store = ensureStore();
+    const currentPassword = String(req.body?.currentPassword || '').trim();
+    const newUsername = String(req.body?.newUsername || '').trim();
+    const newPassword = String(req.body?.newPassword || '').trim();
+
+    if (
+      !store.adminAuth ||
+      !verifyScryptPassword(currentPassword, store.adminAuth.passwordHash, store.adminAuth.salt)
+    ) {
+      res.status(401).json({ error: 'Current password is incorrect.' });
+      return;
+    }
+    if (newUsername.length < 3 || newPassword.length < 6) {
+      res.status(400).json({
+        error: 'New username must be at least 3 characters and password at least 6 characters.',
+      });
+      return;
+    }
+    const { hash, salt } = hashPasswordScrypt(newPassword);
+    store.adminAuth = { username: newUsername, passwordHash: hash, salt };
+    saveStore(store);
+    res.json({ updated: true, username: newUsername });
   });
 
   app.post('/api/admin/logout', (req, res) => {
@@ -421,7 +603,14 @@ async function startServer() {
       return;
     }
     const store = ensureStore();
-    res.json(store);
+    const { adminAuth: _omitAuth, ...safeStore } = store;
+    res.json({
+      ...safeStore,
+      envManagedCredentials: Boolean(ENV_ADMIN_PASSWORD),
+      adminUsername: ENV_ADMIN_PASSWORD
+        ? ENV_ADMIN_USERNAME
+        : store.adminAuth?.username || 'admin',
+    });
   });
 
   app.post('/api/products', (req, res) => {
@@ -564,6 +753,27 @@ async function startServer() {
     if (req.body?.status) {
       order.status = req.body.status;
     }
+    if (req.body?.courierName !== undefined) {
+      const c = String(req.body.courierName).trim();
+      if (c) order.courierName = c;
+      else delete order.courierName;
+    }
+    if (req.body?.trackingNumber !== undefined) {
+      const tn = String(req.body.trackingNumber).trim();
+      if (tn) order.trackingNumber = tn;
+      else delete order.trackingNumber;
+    }
+    if (req.body?.trackingUrl !== undefined) {
+      const tu = String(req.body.trackingUrl).trim();
+      if (!tu) {
+        delete order.trackingUrl;
+      } else if (isSafeHttpUrl(tu)) {
+        order.trackingUrl = tu;
+      } else {
+        res.status(400).json({ error: 'Tracking URL must start with https:// or http://' });
+        return;
+      }
+    }
     saveStore(store);
     res.json(order);
   });
@@ -658,9 +868,52 @@ async function startServer() {
       return;
     }
     const store = ensureStore();
-    store.settings = { ...store.settings, ...req.body };
+    const body = req.body || {};
+    if (body.orderWebhookUrl && !isSafeWebhookUrl(String(body.orderWebhookUrl))) {
+      res.status(400).json({ error: 'Invalid webhook URL. Must be a valid public http/https URL.' });
+      return;
+    }
+    store.settings = { ...store.settings, ...body };
     saveStore(store);
     res.json(store.settings);
+  });
+
+  app.get('/api/admin/export', (req, res) => {
+    if (!isAdmin(req)) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+    const store = ensureStore();
+    const { adminAuth: _omitAuth, ...backup } = store;
+    res.json({
+      exportedAt: new Date().toISOString(),
+      studio: 'The Crocheting Era',
+      data: backup,
+    });
+  });
+
+  app.post('/api/admin/import', (req, res) => {
+    if (!isAdmin(req)) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+    const payload = req.body?.store || req.body?.data || req.body;
+    if (!payload || !Array.isArray(payload.products) || !payload.settings) {
+      res.status(400).json({ error: 'Invalid studio backup JSON structure.' });
+      return;
+    }
+    const current = ensureStore();
+    const restored: StoreData = {
+      products: payload.products,
+      reviews: Array.isArray(payload.reviews) ? payload.reviews : current.reviews,
+      orders: Array.isArray(payload.orders) ? payload.orders : current.orders,
+      enquiries: Array.isArray(payload.enquiries) ? payload.enquiries : current.enquiries,
+      newsletter: Array.isArray(payload.newsletter) ? payload.newsletter : current.newsletter,
+      settings: { ...current.settings, ...payload.settings },
+      adminAuth: current.adminAuth,
+    };
+    saveStore(restored);
+    res.json({ restored: true, products: restored.products.length });
   });
 
   app.post('/api/admin/test-whatsapp-alert', async (req, res) => {
@@ -670,6 +923,14 @@ async function startServer() {
     }
     const store = ensureStore();
     const testSettings: StudioSettings = { ...store.settings, ...(req.body?.settings || {}) };
+    if (
+      testSettings.whatsappAlertMode === 'webhook' &&
+      testSettings.orderWebhookUrl &&
+      !isSafeWebhookUrl(testSettings.orderWebhookUrl)
+    ) {
+      res.status(400).json({ status: 'Failed', detail: 'Invalid webhook URL.' });
+      return;
+    }
     const result = await dispatchAdminWhatsAppAlert(
       '🧶 *VERIFICATION ALERT — The Crocheting Era*\nAutomatic WhatsApp order alerts are connected and ready for new orders!',
       testSettings,

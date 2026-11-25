@@ -503,19 +503,20 @@ export default function App() {
                           motif="bouquet"
                           primaryColor="#E3A1B4"
                           accentColor="#8B3152"
-                          alt="Pastel Tulip and Baby's Breath Crochet Bouquet"
+                          customImageUrl={settings.heroImageUrl || undefined}
+                          alt={settings.heroBadgeText || "Pastel Tulip and Baby's Breath Crochet Bouquet"}
                           className="h-full w-full"
                         />
                       </button>
                       <div className="mt-3 flex items-center justify-between gap-2">
                         <div>
                           <p className="font-display text-lg font-semibold text-[#2A2225]">
-                            Pastel Tulip Bouquet
+                            {settings.heroBadgeText || 'Pastel Tulip Bouquet'}
                           </p>
                           <p className="text-xs text-[#6E6266]">Zero wilting keepsake flowers</p>
                         </div>
                         <span className="text-sm font-semibold text-[#8B3152] tabular-nums">
-                          {formatINR(1299)}
+                          {formatINR(products[0]?.price || 1299)}
                         </span>
                       </div>
                     </div>
@@ -1125,6 +1126,8 @@ export default function App() {
             onSelectProduct={openProductDetail}
             onAddToCart={addToCart}
             onBuyNow={buyNow}
+            allowCustomerReviews={settings.allowCustomerReviews !== false}
+            autoApproveReviews={settings.autoApproveReviews !== false}
             onReviewSubmitted={(rev) => {
               setReviews((prev) => [rev, ...prev]);
               loadStore();
@@ -1133,12 +1136,54 @@ export default function App() {
         )}
 
         {/* Custom Order View */}
-        {view === 'custom' && <CustomOrderView whatsappNumber={settings.whatsappNumber} />}
+        {view === 'custom' &&
+          (settings.allowCustomOrders === false ? (
+            <div className="mx-auto max-w-2xl px-4 py-16 sm:px-6 text-center space-y-5">
+              <div className="rounded-2xl border border-[#E6DDD7] bg-white p-8 sm:p-10 space-y-4">
+                <p className="text-xs font-semibold uppercase tracking-widest text-[#8B3152]">
+                  Studio Notice
+                </p>
+                <h1 className="font-display text-3xl sm:text-4xl font-semibold text-[#2A2225]">
+                  Custom Orders Temporarily Paused
+                </h1>
+                <p className="text-sm leading-relaxed text-[#574D50]">
+                  Our crochet hook is busy finishing current handmade commissions! Custom slots will
+                  reopen shortly. You can still browse ready-to-order creations or message us on
+                  WhatsApp for upcoming availability.
+                </p>
+                <div className="flex flex-wrap justify-center gap-3 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => navigate('shop', 'All')}
+                    className="min-h-[44px] rounded-xl bg-[#8B3152] px-6 py-2.5 text-sm font-semibold text-white hover:bg-[#65213B]"
+                  >
+                    Browse Ready Collection
+                  </button>
+                  <a
+                    href={buildWhatsAppUrl(
+                      settings.whatsappNumber,
+                      'Hello The Crocheting Era! When will custom crochet slots reopen?'
+                    )}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex min-h-[44px] items-center gap-2 rounded-xl border border-[#51664A]/35 bg-[#E4EBE2] px-5 py-2.5 text-sm font-semibold text-[#3C4F36] hover:bg-[#D5E1D2]"
+                  >
+                    <MessageCircle className="h-4 w-4" />
+                    Ask on WhatsApp
+                  </a>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <CustomOrderView whatsappNumber={settings.whatsappNumber} />
+          ))}
 
         {/* About View */}
         {view === 'about' && (
           <AboutView
             whatsappNumber={settings.whatsappNumber}
+            studioImage1={settings.aboutStudioImageUrl1}
+            studioImage2={settings.aboutStudioImageUrl2}
             onNavigateShop={() => navigate('shop', 'All')}
             onNavigateCustom={() => navigate('custom')}
           />
@@ -1233,7 +1278,14 @@ export default function App() {
 
           <div className="pt-6 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-[#8E8185]">
             <p>© 2026 The Crocheting Era – Handmade Crochet Studio. Crafted with love in India.</p>
-            <p>UPI · Google Pay · PhonePe · Paytm · COD Available</p>
+            <p>
+              {[
+                settings.upiEnabled !== false ? 'UPI · Google Pay · PhonePe · Paytm' : null,
+                settings.codEnabled ? 'COD Available' : null,
+              ]
+                .filter(Boolean)
+                .join(' · ') || 'Direct Studio Checkout'}
+            </p>
           </div>
         </div>
       </footer>

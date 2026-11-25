@@ -1,6 +1,9 @@
 import React, { useState } from 'react';
+import QRCode from 'qrcode';
 import {
   CheckCircle2,
+  Copy,
+  ExternalLink,
   Gift,
   MessageCircle,
   Minus,
@@ -51,6 +54,9 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
   const [stateName, setStateName] = useState('');
   const [pincode, setPincode] = useState('');
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('Google Pay');
+  const [upiTransactionId, setUpiTransactionId] = useState('');
+  const [generatedQrUrl, setGeneratedQrUrl] = useState('');
+  const [copiedUpi, setCopiedUpi] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
   const [confirmedOrder, setConfirmedOrder] = useState<Order | null>(null);
@@ -62,21 +68,59 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
   }, [isOpen, startAtCheckout]);
 
   const subtotal = items.reduce((sum, item) => sum + item.price * item.quantity, 0);
+  const upiEnabled = settings.upiEnabled !== false;
+  const giftWrapAllowed = settings.giftWrapEnabled !== false;
 
   React.useEffect(() => {
     if (!settings.codEnabled && paymentMethod === 'Cash on Delivery') {
-      setPaymentMethod('Google Pay');
+      setPaymentMethod(upiEnabled ? 'Google Pay' : 'UPI');
+    } else if (!upiEnabled && paymentMethod !== 'Cash on Delivery' && settings.codEnabled) {
+      setPaymentMethod('Cash on Delivery');
     }
-  }, [settings.codEnabled, paymentMethod]);
+  }, [settings.codEnabled, upiEnabled, paymentMethod]);
+
+  React.useEffect(() => {
+    if (!giftWrapAllowed && giftWrap) {
+      setGiftWrap(false);
+      setGiftMessage('');
+    }
+  }, [giftWrapAllowed, giftWrap]);
+
+  const giftFee = giftWrapAllowed && giftWrap ? settings.giftWrapFee : 0;
+  const flatShipping = settings.shippingFee ?? 79;
+  const shippingFee =
+    items.length === 0 ? 0 : subtotal >= settings.freeShippingThreshold ? 0 : flatShipping;
+  const total = subtotal + giftFee + shippingFee;
+
+  const upiPayUri = settings.upiId
+    ? `upi://pay?pa=${encodeURIComponent(settings.upiId.trim())}&pn=${encodeURIComponent(
+        settings.upiPayeeName || 'The Crocheting Era'
+      )}&am=${total}&cu=INR&tn=${encodeURIComponent('The Crocheting Era Order')}`
+    : '';
+
+  React.useEffect(() => {
+    let active = true;
+    if (!upiPayUri || settings.upiQrImageUrl) {
+      setGeneratedQrUrl('');
+      return;
+    }
+    QRCode.toDataURL(upiPayUri, { width: 220, margin: 1 })
+      .then((url) => {
+        if (active) setGeneratedQrUrl(url);
+      })
+      .catch(() => {
+        if (active) setGeneratedQrUrl('');
+      });
+    return () => {
+      active = false;
+    };
+  }, [upiPayUri, settings.upiQrImageUrl]);
 
   if (!isOpen) return null;
 
-  const giftFee = giftWrap ? settings.giftWrapFee : 0;
-  const shippingFee =
-    items.length === 0 ? 0 : subtotal >= settings.freeShippingThreshold ? 0 : 79;
-  const total = subtotal + giftFee + shippingFee;
-
-  const availablePayments: PaymentMethod[] = ['UPI', 'Google Pay', 'PhonePe', 'Paytm'];
+  const availablePayments: PaymentMethod[] = upiEnabled
+    ? ['UPI', 'Google Pay', 'PhonePe', 'Paytm']
+    : [];
   if (settings.codEnabled) {
     availablePayments.push('Cash on Delivery');
   }
@@ -98,9 +142,11 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
           state: stateName,
           pincode,
           items,
-          giftWrap,
-          giftMessage,
+          giftWrap: giftWrapAllowed && giftWrap,
+          giftMessage: giftWrapAllowed && giftWrap ? giftMessage : '',
           paymentMethod,
+          upiTransactionId:
+            paymentMethod !== 'Cash on Delivery' ? upiTransactionId.trim() : undefined,
         }),
       });
       const data = await res.json();
@@ -113,6 +159,7 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
       onClearCart();
       setGiftWrap(false);
       setGiftMessage('');
+      setUpiTransactionId('');
       setStep('confirmed');
     } catch {
       setErrorMsg('Network error while placing order. Please try again.');
@@ -127,7 +174,7 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
       `Customer: ${order.customerName}`,
       `Phone: ${order.phone}`,
       `Delivery: ${order.address}, ${order.city}, ${order.state} - ${order.pincode}`,
-      `Payment Method: ${order.paymentMethod}`,
+      `Payment Method: ${order.paymentMethod}${order.upiTransactionId ? ` (UTR: ${order.upiTransactionId})` : ''}`,
       '',
       'Items:',
       ...order.items.map(
@@ -337,37 +384,39 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
               </div>
 
               {/* Gift Packaging */}
-              <div className="rounded-2xl border border-[#E6DDD7] bg-white p-4 space-y-3">
-                <label className="flex items-start gap-3 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={giftWrap}
-                    onChange={(e) => setGiftWrap(e.target.checked)}
-                    className="mt-0.5 h-4 w-4 accent-[#8B3152]"
-                  />
-                  <div className="flex-1 text-xs">
-                    <div className="flex items-center justify-between font-semibold text-[#2A2225]">
-                      <span className="inline-flex items-center gap-1.5">
-                        <Gift className="h-3.5 w-3.5 text-[#8B3152]" />
-                        Special Boutique Gift Packaging
-                      </span>
-                      <span className="tabular-nums">+{formatINR(settings.giftWrapFee)}</span>
+              {giftWrapAllowed && (
+                <div className="rounded-2xl border border-[#E6DDD7] bg-white p-4 space-y-3">
+                  <label className="flex items-start gap-3 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={giftWrap}
+                      onChange={(e) => setGiftWrap(e.target.checked)}
+                      className="mt-0.5 h-4 w-4 accent-[#8B3152]"
+                    />
+                    <div className="flex-1 text-xs">
+                      <div className="flex items-center justify-between font-semibold text-[#2A2225]">
+                        <span className="inline-flex items-center gap-1.5">
+                          <Gift className="h-3.5 w-3.5 text-[#8B3152]" />
+                          Special Boutique Gift Packaging
+                        </span>
+                        <span className="tabular-nums">+{formatINR(settings.giftWrapFee)}</span>
+                      </div>
+                      <p className="mt-0.5 text-[#6E6266]">
+                        Pastel keepsake box, satin ribbon, dried lavender sprig &amp; handwritten card.
+                      </p>
                     </div>
-                    <p className="mt-0.5 text-[#6E6266]">
-                      Pastel keepsake box, satin ribbon, dried lavender sprig &amp; handwritten card.
-                    </p>
-                  </div>
-                </label>
-                {giftWrap && (
-                  <textarea
-                    rows={2}
-                    value={giftMessage}
-                    onChange={(e) => setGiftMessage(e.target.value)}
-                    placeholder="Write your personalized gift card message..."
-                    className="w-full rounded-xl border border-[#E6DDD7] bg-[#FBF7F3] px-3 py-2 text-xs focus:border-[#8B3152] focus:outline-none"
-                  />
-                )}
-              </div>
+                  </label>
+                  {giftWrap && (
+                    <textarea
+                      rows={2}
+                      value={giftMessage}
+                      onChange={(e) => setGiftMessage(e.target.value)}
+                      placeholder="Write your personalized gift card message..."
+                      className="w-full rounded-xl border border-[#E6DDD7] bg-[#FBF7F3] px-3 py-2 text-xs focus:border-[#8B3152] focus:outline-none"
+                    />
+                  )}
+                </div>
+              )}
             </div>
           ) : (
             <form id="checkout-form" onSubmit={handlePlaceOrder} className="space-y-4">
@@ -477,25 +526,100 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
                 <h3 className="font-display text-xl font-semibold text-[#2A2225]">
                   Payment Method
                 </h3>
-                <div className="grid grid-cols-2 gap-2.5">
-                  {availablePayments.map((method) => (
-                    <button
-                      key={method}
-                      type="button"
-                      onClick={() => setPaymentMethod(method)}
-                      className={`min-h-[42px] rounded-xl border px-3 py-2 text-xs font-semibold transition-all ${
-                        paymentMethod === method
-                          ? 'border-[#8B3152] bg-[#F4DCE2]/60 text-[#65213B]'
-                          : 'border-[#E6DDD7] bg-[#FBF7F3] text-[#2A2225]'
-                      }`}
-                    >
-                      {method}
-                    </button>
-                  ))}
-                </div>
+                {availablePayments.length === 0 ? (
+                  <p className="text-xs text-[#8B3152]">
+                    All checkout methods are currently paused. Please contact the studio on WhatsApp.
+                  </p>
+                ) : (
+                  <div className="grid grid-cols-2 gap-2.5">
+                    {availablePayments.map((method) => (
+                      <button
+                        key={method}
+                        type="button"
+                        onClick={() => setPaymentMethod(method)}
+                        className={`min-h-[42px] rounded-xl border px-3 py-2 text-xs font-semibold transition-all ${
+                          paymentMethod === method
+                            ? 'border-[#8B3152] bg-[#F4DCE2]/60 text-[#65213B]'
+                            : 'border-[#E6DDD7] bg-[#FBF7F3] text-[#2A2225]'
+                        }`}
+                      >
+                        {method}
+                      </button>
+                    ))}
+                  </div>
+                )}
+
+                {paymentMethod !== 'Cash on Delivery' &&
+                  upiEnabled &&
+                  (settings.upiQrImageUrl || settings.upiId) && (
+                    <div className="rounded-xl border border-[#EFE6DD] bg-[#FBF7F3] p-4 space-y-3">
+                      <div className="flex flex-col sm:flex-row items-center gap-4">
+                        {(settings.upiQrImageUrl || generatedQrUrl) && (
+                          <div className="h-32 w-32 shrink-0 overflow-hidden rounded-xl border border-[#E6DDD7] bg-white p-1.5">
+                            <img
+                              src={settings.upiQrImageUrl || generatedQrUrl}
+                              alt="Studio UPI Payment QR"
+                              className="h-full w-full object-contain"
+                            />
+                          </div>
+                        )}
+                        <div className="space-y-2 text-xs text-[#4E4347] text-center sm:text-left">
+                          <p className="font-semibold text-[#2A2225]">
+                            Scan &amp; Pay {formatINR(total)}
+                          </p>
+                          {settings.upiId && (
+                            <div className="inline-flex items-center gap-2 rounded-lg border border-[#E6DDD7] bg-white px-2.5 py-1.5 font-mono text-[11px] text-[#2A2225]">
+                              <span>{settings.upiId}</span>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  navigator.clipboard?.writeText(settings.upiId || '');
+                                  setCopiedUpi(true);
+                                  setTimeout(() => setCopiedUpi(false), 1800);
+                                }}
+                                aria-label="Copy UPI ID"
+                                className="text-[#8B3152] hover:text-[#65213B]"
+                              >
+                                <Copy className="h-3.5 w-3.5" />
+                              </button>
+                            </div>
+                          )}
+                          {copiedUpi && (
+                            <p className="text-[11px] font-medium text-[#51664A]">UPI ID copied!</p>
+                          )}
+                          {upiPayUri && (
+                            <div>
+                              <a
+                                href={upiPayUri}
+                                className="inline-flex items-center gap-1 font-semibold text-[#8B3152] hover:underline"
+                              >
+                                <ExternalLink className="h-3 w-3" />
+                                Pay via UPI App
+                              </a>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
+                      <div>
+                        <label className="block text-[11px] font-semibold text-[#6E6266] mb-1">
+                          UPI Transaction / UTR Reference No. (Optional if paid now)
+                        </label>
+                        <input
+                          value={upiTransactionId}
+                          onChange={(e) => setUpiTransactionId(e.target.value)}
+                          placeholder="Enter 12-digit UTR after paying"
+                          className="w-full rounded-xl border border-[#E6DDD7] bg-white px-3 py-2 text-xs font-mono focus:border-[#8B3152] focus:outline-none"
+                        />
+                      </div>
+                    </div>
+                  )}
+
                 <p className="text-xs text-[#6E6266] leading-relaxed">
                   {paymentMethod === 'Cash on Delivery'
                     ? 'Pay in cash or UPI upon delivery. Orders are confirmed quickly via WhatsApp.'
+                    : settings.upiId || settings.upiQrImageUrl
+                    ? `Scan the QR above or share your ${paymentMethod} confirmation via WhatsApp once placed.`
                     : `After placing your order, we confirm your ${paymentMethod} payment link directly via WhatsApp before crafting starts.`}
                 </p>
               </div>

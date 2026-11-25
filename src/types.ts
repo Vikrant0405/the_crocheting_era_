@@ -105,6 +105,10 @@ export interface Order {
   shippingFee: number;
   total: number;
   paymentMethod: PaymentMethod;
+  upiTransactionId?: string;
+  courierName?: string;
+  trackingNumber?: string;
+  trackingUrl?: string;
   status: OrderStatus;
   createdAt: string;
   whatsappAlertStatus?: 'Sent' | 'Not Configured' | 'Failed';
@@ -136,13 +140,32 @@ export interface StudioSettings {
   studioEmail: string;
   studioCity: string;
   codEnabled: boolean;
+  upiEnabled?: boolean;
+  upiId?: string;
+  upiPayeeName?: string;
+  upiQrImageUrl?: string;
+  giftWrapEnabled?: boolean;
   freeShippingThreshold: number;
+  shippingFee?: number;
   giftWrapFee: number;
+  allowCustomOrders?: boolean;
+  allowCustomerReviews?: boolean;
+  autoApproveReviews?: boolean;
+  heroImageUrl?: string;
+  heroBadgeText?: string;
+  aboutStudioImageUrl1?: string;
+  aboutStudioImageUrl2?: string;
   whatsappAlertMode?: WhatsappAlertMode;
   callmebotApiKey?: string;
   whatsappCloudPhoneId?: string;
   whatsappCloudToken?: string;
   orderWebhookUrl?: string;
+}
+
+export interface AdminAuthRecord {
+  username: string;
+  passwordHash: string;
+  salt: string;
 }
 
 export interface StoreData {
@@ -152,4 +175,5 @@ export interface StoreData {
   enquiries: Enquiry[];
   newsletter: string[];
   settings: StudioSettings;
+  adminAuth?: AdminAuthRecord;
 }
