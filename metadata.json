@@ -1,0 +1,6 @@
+{
+  "name": "Wool & Wonder – Handmade Crochet Studio",
+  "description": "Every Stitch Tells a Story. Handmade crochet flowers, soft toys, bags, baby blankets, accessories, home decor, and custom personalized gifts.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
