@@ -100,8 +100,6 @@ export interface Order {
   pincode: string;
   items: CartItem[];
   subtotal: number;
-  discount: number;
-  couponCode?: string;
   giftWrap: boolean;
   giftMessage?: string;
   shippingFee: number;

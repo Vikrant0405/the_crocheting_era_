@@ -61,12 +61,6 @@ function isAdmin(req: express.Request): boolean {
   return true;
 }
 
-const COUPONS: Record<string, { type: 'percent' | 'flat'; value: number; minOrder: number }> = {
-  WELCOME10: { type: 'percent', value: 10, minOrder: 499 },
-  STITCH15: { type: 'percent', value: 15, minOrder: 1200 },
-  HANDMADE100: { type: 'flat', value: 100, minOrder: 899 },
-};
-
 function getPublicSettings(settings: StudioSettings): StudioSettings {
   return {
     whatsappNumber: settings.whatsappNumber,
@@ -95,9 +89,6 @@ function formatAdminOrderMessage(order: Order): string {
     '',
     `Subtotal: ₹${order.subtotal.toLocaleString('en-IN')}`,
   ];
-  if (order.discount > 0) {
-    lines.push(`Discount (${order.couponCode}): -₹${order.discount.toLocaleString('en-IN')}`);
-  }
   if (order.giftWrap) {
     lines.push(`Gift Wrap: Yes${order.giftMessage ? ` ("${order.giftMessage}")` : ''}`);
   }
@@ -211,27 +202,6 @@ async function startServer() {
     });
   });
 
-  app.post('/api/coupon/validate', (req, res) => {
-    const code = String(req.body?.code || '').trim().toUpperCase();
-    const subtotal = Number(req.body?.subtotal || 0);
-    const coupon = COUPONS[code];
-    if (!coupon) {
-      res.status(404).json({ error: 'Invalid coupon code. Try WELCOME10 or STITCH15.' });
-      return;
-    }
-    if (subtotal < coupon.minOrder) {
-      res.status(400).json({
-        error: `Minimum order of ₹${coupon.minOrder} required for ${code}.`,
-      });
-      return;
-    }
-    const discount =
-      coupon.type === 'percent'
-        ? Math.round((subtotal * coupon.value) / 100)
-        : coupon.value;
-    res.json({ code, discount, message: `Coupon ${code} applied (-₹${discount}).` });
-  });
-
   app.post('/api/orders', async (req, res) => {
     const store = ensureStore();
     const body = req.body;
@@ -276,19 +246,10 @@ async function startServer() {
       }
     }
 
-    let discount = 0;
-    const code = String(body.couponCode || '').trim().toUpperCase();
-    if (code && COUPONS[code] && subtotal >= COUPONS[code].minOrder) {
-      discount =
-        COUPONS[code].type === 'percent'
-          ? Math.round((subtotal * COUPONS[code].value) / 100)
-          : COUPONS[code].value;
-    }
-
     const giftWrap = Boolean(body.giftWrap);
     const giftFee = giftWrap ? store.settings.giftWrapFee : 0;
-    const shippingFee = subtotal - discount >= store.settings.freeShippingThreshold ? 0 : 79;
-    const total = Math.max(0, subtotal - discount + giftFee + shippingFee);
+    const shippingFee = subtotal >= store.settings.freeShippingThreshold ? 0 : 79;
+    const total = Math.max(0, subtotal + giftFee + shippingFee);
 
     const maxOrderNum = store.orders.reduce((max, o) => {
       const m = o.id.match(/(\d+)$/);
@@ -305,8 +266,6 @@ async function startServer() {
       pincode: String(body.pincode || '').trim(),
       items: body.items,
       subtotal,
-      discount,
-      couponCode: code || undefined,
       giftWrap,
       giftMessage: body.giftMessage ? String(body.giftMessage).trim() : undefined,
       shippingFee,

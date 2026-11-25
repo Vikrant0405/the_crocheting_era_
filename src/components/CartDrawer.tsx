@@ -6,7 +6,6 @@ import {
   Minus,
   Plus,
   ShoppingBag,
-  Tag,
   Trash2,
   X,
 } from 'lucide-react';
@@ -40,11 +39,6 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
   const [step, setStep] = useState<'cart' | 'checkout' | 'confirmed'>(
     startAtCheckout ? 'checkout' : 'cart'
   );
-  const [couponInput, setCouponInput] = useState('');
-  const [appliedCoupon, setAppliedCoupon] = useState<{ code: string; discount: number } | null>(
-    null
-  );
-  const [couponMessage, setCouponMessage] = useState('');
   const [giftWrap, setGiftWrap] = useState(false);
   const [giftMessage, setGiftMessage] = useState('');
 
@@ -75,48 +69,17 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
     }
   }, [settings.codEnabled, paymentMethod]);
 
-  React.useEffect(() => {
-    if (appliedCoupon) {
-      setAppliedCoupon(null);
-      setCouponMessage('Subtotal changed — please re-apply your coupon.');
-    }
-  }, [subtotal]);
-
   if (!isOpen) return null;
 
-  const discount = appliedCoupon ? appliedCoupon.discount : 0;
   const giftFee = giftWrap ? settings.giftWrapFee : 0;
-  const afterDiscount = Math.max(0, subtotal - discount);
   const shippingFee =
-    items.length === 0 ? 0 : afterDiscount >= settings.freeShippingThreshold ? 0 : 79;
-  const total = afterDiscount + giftFee + shippingFee;
+    items.length === 0 ? 0 : subtotal >= settings.freeShippingThreshold ? 0 : 79;
+  const total = subtotal + giftFee + shippingFee;
 
   const availablePayments: PaymentMethod[] = ['UPI', 'Google Pay', 'PhonePe', 'Paytm'];
   if (settings.codEnabled) {
     availablePayments.push('Cash on Delivery');
   }
-
-  const handleApplyCoupon = async () => {
-    if (!couponInput.trim()) return;
-    setCouponMessage('');
-    try {
-      const res = await fetch('/api/coupon/validate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ code: couponInput.trim(), subtotal }),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        setAppliedCoupon(null);
-        setCouponMessage(data.error || 'Could not apply coupon.');
-      } else {
-        setAppliedCoupon({ code: data.code, discount: data.discount });
-        setCouponMessage(data.message);
-      }
-    } catch {
-      setCouponMessage('Unable to validate coupon right now.');
-    }
-  };
 
   const handlePlaceOrder = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -135,7 +98,6 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
           state: stateName,
           pincode,
           items,
-          couponCode: appliedCoupon?.code,
           giftWrap,
           giftMessage,
           paymentMethod,
@@ -149,9 +111,6 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
       setConfirmedOrder(data);
       onOrderCreated(data);
       onClearCart();
-      setAppliedCoupon(null);
-      setCouponInput('');
-      setCouponMessage('');
       setGiftWrap(false);
       setGiftMessage('');
       setStep('confirmed');
@@ -298,9 +257,9 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
             <div className="space-y-5">
               {/* Free shipping indicator */}
               <div className="rounded-xl bg-[#E4EBE2]/70 border border-[#51664A]/20 px-4 py-2.5 text-xs text-[#3C4F36]">
-                {afterDiscount >= settings.freeShippingThreshold
+                {subtotal >= settings.freeShippingThreshold
                   ? 'You unlocked complimentary studio delivery across India!'
-                  : `Add ${formatINR(settings.freeShippingThreshold - afterDiscount)} more for free shipping.`}
+                  : `Add ${formatINR(settings.freeShippingThreshold - subtotal)} more for free shipping.`}
               </div>
 
               {/* Cart Items */}
@@ -375,38 +334,6 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
                     </div>
                   </div>
                 ))}
-              </div>
-
-              {/* Coupon Box */}
-              <div className="rounded-2xl border border-[#E6DDD7] bg-white p-4 space-y-2.5">
-                <label className="flex items-center gap-1.5 text-xs font-semibold text-[#2A2225]">
-                  <Tag className="h-3.5 w-3.5 text-[#8B3152]" />
-                  Discount Coupon (Try <span className="font-mono">WELCOME10</span>)
-                </label>
-                <div className="flex gap-2">
-                  <input
-                    value={couponInput}
-                    onChange={(e) => setCouponInput(e.target.value)}
-                    placeholder="Enter coupon code"
-                    className="flex-1 rounded-xl border border-[#E6DDD7] bg-[#FBF7F3] px-3 py-2 text-xs uppercase focus:border-[#8B3152] focus:outline-none"
-                  />
-                  <button
-                    type="button"
-                    onClick={handleApplyCoupon}
-                    className="rounded-xl bg-[#2A2225] px-4 py-2 text-xs font-semibold text-white hover:bg-[#8B3152]"
-                  >
-                    Apply
-                  </button>
-                </div>
-                {couponMessage && (
-                  <p
-                    className={`text-xs ${
-                      appliedCoupon ? 'text-[#51664A]' : 'text-[#8B3152]'
-                    }`}
-                  >
-                    {couponMessage}
-                  </p>
-                )}
               </div>
 
               {/* Gift Packaging */}
@@ -590,12 +517,6 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
                 <span>Subtotal</span>
                 <span className="font-medium text-[#2A2225]">{formatINR(subtotal)}</span>
               </div>
-              {discount > 0 && (
-                <div className="flex justify-between text-[#51664A]">
-                  <span>Coupon ({appliedCoupon?.code})</span>
-                  <span>-{formatINR(discount)}</span>
-                </div>
-              )}
               {giftWrap && (
                 <div className="flex justify-between">
                   <span>Boutique Gift Packaging</span>

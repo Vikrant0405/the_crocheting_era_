@@ -929,11 +929,11 @@ export default function App() {
                       Studio Letter
                     </p>
                     <h2 className="font-display text-3xl font-semibold text-[#2A2225]">
-                      Get Seasonal Drops &amp; Festive Gift Coupons
+                      Get Seasonal Drops &amp; Studio Updates
                     </h2>
                     <p className="text-sm text-[#574D50]">
-                      Use code <span className="font-mono font-semibold text-[#8B3152]">WELCOME10</span>{' '}
-                      at checkout for 10% off your first bouquet or gift box.
+                      Be the first to hear about new handmade crochet collections, festive garlands,
+                      and custom gift slots.
                     </p>
                   </div>
 
